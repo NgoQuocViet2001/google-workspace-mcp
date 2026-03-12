@@ -72,7 +72,8 @@ $env:GOOGLE_OAUTH_ACCESS_TOKEN="ya29...."
 ## Installation
 
 ```powershell
-cd C:\Users\Admin\google-workspace-mcp
+git clone https://github.com/NgoQuocViet2001/google-workspace-mcp.git
+cd google-workspace-mcp
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -105,7 +106,7 @@ google-workspace-mcp
 ## Running the Server
 
 ```powershell
-cd C:\Users\Admin\google-workspace-mcp
+cd <path-to-repo>
 .venv\Scripts\python.exe mcp_google_workspace.py
 ```
 
@@ -133,11 +134,11 @@ google-workspace-mcp auth status
 {
   "mcpServers": {
     "google-workspace": {
-      "command": "C:/Users/Admin/google-workspace-mcp/.venv/Scripts/python.exe",
-      "args": ["C:/Users/Admin/google-workspace-mcp/mcp_google_workspace.py"],
+      "command": "<path-to-repo>/.venv/Scripts/python.exe",
+      "args": ["<path-to-repo>/mcp_google_workspace.py"],
       "env": {
         "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/path/to/oauth-client-secret.json",
-        "GOOGLE_OAUTH_TOKEN_FILE": "C:/Users/Admin/.google-workspace-mcp/oauth-token.json"
+        "GOOGLE_OAUTH_TOKEN_FILE": "C:/path/to/oauth-token.json"
       }
     }
   }
@@ -161,7 +162,7 @@ If you installed the package directly from GitHub into an environment on your PA
       "command": "google-workspace-mcp",
       "env": {
         "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/path/to/oauth-client-secret.json",
-        "GOOGLE_OAUTH_TOKEN_FILE": "C:/Users/Admin/.google-workspace-mcp/oauth-token.json"
+        "GOOGLE_OAUTH_TOKEN_FILE": "C:/path/to/oauth-token.json"
       }
     }
   }
@@ -184,25 +185,27 @@ If you installed the package directly from GitHub into an environment on your PA
 
 ## Example Prompts
 
+Replace placeholders such as `<spreadsheet-id>`, `<sheet-name>`, and `<output-dir>` with your own values.
+
 ### Read one row from a sheet
 
 ```text
 get_sheet_row(
-  "1_6tB3R932HqKHYJoJRZByEFueFdOnJhR4v6IyDkwdnU",
-  "Sheet1",
-  129,
+  "<spreadsheet-id>",
+  "<sheet-name>",
+  42,
   1
 )
 ```
 
-`read_sheet_values` also accepts row-style input such as `Sheet1!129:129` and normalizes it to a valid full-row A1 range automatically.
+`read_sheet_values` also accepts row-style input such as `<sheet-name>!42:42` and normalizes it to a valid full-row A1 range automatically.
 
 ### Read grid data with formulas, notes, and links
 
 ```text
 read_sheet_grid(
-  "1_6tB3R932HqKHYJoJRZByEFueFdOnJhR4v6IyDkwdnU",
-  "Sheet1!A1:Z200"
+  "<spreadsheet-id>",
+  "<sheet-name>!A1:Z200"
 )
 ```
 
@@ -210,7 +213,7 @@ read_sheet_grid(
 
 ```text
 search_sheet(
-  "1_6tB3R932HqKHYJoJRZByEFueFdOnJhR4v6IyDkwdnU",
+  "<spreadsheet-id>",
   "login"
 )
 ```
@@ -219,8 +222,8 @@ search_sheet(
 
 ```text
 sheet_to_json(
-  "1_6tB3R932HqKHYJoJRZByEFueFdOnJhR4v6IyDkwdnU",
-  "Sheet1",
+  "<spreadsheet-id>",
+  "<sheet-name>",
   1
 )
 ```
@@ -229,9 +232,9 @@ sheet_to_json(
 
 ```text
 inspect_sheet_images(
-  "1_6tB3R932HqKHYJoJRZByEFueFdOnJhR4v6IyDkwdnU",
-  "Sheet1",
-  "C:/Users/Admin/google-workspace-mcp/out/sheet-images"
+  "<spreadsheet-id>",
+  "<sheet-name>",
+  "C:/path/to/output/sheet-images"
 )
 ```
 
@@ -239,7 +242,7 @@ inspect_sheet_images(
 
 ```text
 read_google_doc(
-  "https://docs.google.com/document/d/FILE_ID/edit",
+  "https://docs.google.com/document/d/<doc-id>/edit",
   null,
   false,
   null
@@ -250,8 +253,8 @@ read_google_doc(
 
 ```text
 download_google_doc_images(
-  "https://docs.google.com/document/d/FILE_ID/edit",
-  "C:/Users/Admin/google-workspace-mcp/out/doc-images",
+  "https://docs.google.com/document/d/<doc-id>/edit",
+  "C:/path/to/output/doc-images",
   null
 )
 ```
