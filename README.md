@@ -55,7 +55,7 @@ pip install -r requirements.txt
 ### Option 1: clone the repository
 
 ```powershell
-git clone https://github.com/ngoquocviet2001/google-workspace-mcp.git
+git clone https://github.com/NgoQuocViet2001/google-workspace-mcp.git
 cd google-workspace-mcp
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -65,7 +65,7 @@ pip install -r requirements.txt
 ### Option 2: install directly from GitHub
 
 ```powershell
-pip install "git+https://github.com/ngoquocviet2001/google-workspace-mcp.git"
+pip install "git+https://github.com/NgoQuocViet2001/google-workspace-mcp.git"
 ```
 
 If you install it this way, the console entrypoint is:
