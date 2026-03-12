@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -12,7 +14,9 @@ from xml.etree import ElementTree as ET
 
 import requests
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2.credentials import Credentials as UserOAuthCredentials
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from mcp.server.fastmcp import FastMCP
 
 
@@ -20,6 +24,7 @@ DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+DEFAULT_READONLY_SCOPES = [DOCS_SCOPE, DRIVE_SCOPE, SHEETS_SCOPE]
 
 DOC_URL_RE = re.compile(r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")
 SHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)")
@@ -88,6 +93,10 @@ def path_from_env(value: str | None) -> Path | None:
     if not value:
         return None
     return Path(os.path.expandvars(os.path.expanduser(value)))
+
+
+def default_oauth_token_file() -> Path:
+    return Path.home() / ".google-workspace-mcp" / "oauth-token.json"
 
 
 def extract_file_id(value: str, kind: str | None = None) -> str:
@@ -181,6 +190,17 @@ class GoogleWorkspaceClient:
     def __init__(self) -> None:
         self.api_key = os.getenv("GOOGLE_API_KEY")
         self.oauth_access_token = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN")
+        self.oauth_client_secrets_file = path_from_env(os.getenv("GOOGLE_OAUTH_CLIENT_SECRETS_FILE"))
+        self.oauth_client_config_json = os.getenv("GOOGLE_OAUTH_CLIENT_CONFIG_JSON")
+        self.oauth_token_file = (
+            path_from_env(os.getenv("GOOGLE_OAUTH_TOKEN_FILE")) or default_oauth_token_file()
+        )
+        self.oauth_local_server_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_SERVER_PORT", "0"))
+        self.oauth_open_browser = os.getenv("GOOGLE_OAUTH_OPEN_BROWSER", "true").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
         self.service_account_file = path_from_env(os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"))
         self.service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
         self.timeout = int(os.getenv("GOOGLE_HTTP_TIMEOUT_SECONDS", "60"))
@@ -188,10 +208,17 @@ class GoogleWorkspaceClient:
         self.export_root = export_dir or Path.cwd() / "exports"
         self._base_service_account: ServiceAccountCredentials | None = None
         self._scoped_credentials: dict[tuple[str, ...], ServiceAccountCredentials] = {}
+        self._user_credentials: dict[tuple[str, ...], UserOAuthCredentials] = {}
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "google-workspace-mcp/1.0"})
 
     def auth_summary(self) -> dict[str, Any]:
+        oauth_client_ready = bool(self.oauth_client_secrets_file or self.oauth_client_config_json)
+        oauth_client_source = None
+        if self.oauth_client_secrets_file:
+            oauth_client_source = str(self.oauth_client_secrets_file)
+        elif self.oauth_client_config_json:
+            oauth_client_source = "GOOGLE_OAUTH_CLIENT_CONFIG_JSON"
         service_account_ready = bool(self.service_account_file or self.service_account_json)
         service_account_source = None
         if self.service_account_file:
@@ -201,21 +228,28 @@ class GoogleWorkspaceClient:
         return {
             "api_key_configured": bool(self.api_key),
             "oauth_access_token_configured": bool(self.oauth_access_token),
+            "oauth_client_configured": oauth_client_ready,
+            "oauth_client_source": oauth_client_source,
+            "oauth_token_file": str(self.oauth_token_file),
+            "oauth_token_cached": self.oauth_token_file.exists(),
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,
             "recommended_mode": self._recommended_mode(),
             "notes": [
                 "Public Sheets can be read with GOOGLE_API_KEY.",
+                "OAuth desktop client credentials can read private files shared to your Google account.",
                 "Docs API and Drive export are most reliable with a service account or OAuth access token.",
                 "A service account must be granted access to private files or shared drives.",
             ],
         }
 
     def _recommended_mode(self) -> str:
-        if self.service_account_file or self.service_account_json:
-            return "service_account"
         if self.oauth_access_token:
             return "oauth_access_token"
+        if self.oauth_client_secrets_file or self.oauth_client_config_json:
+            return "oauth_client"
+        if self.service_account_file or self.service_account_json:
+            return "service_account"
         if self.api_key:
             return "api_key_public_only"
         return "missing_credentials"
@@ -237,6 +271,88 @@ class GoogleWorkspaceClient:
             "GOOGLE_SERVICE_ACCOUNT_JSON."
         )
 
+    def _oauth_client_is_configured(self) -> bool:
+        return bool(self.oauth_client_secrets_file or self.oauth_client_config_json)
+
+    def _oauth_flow(self, scopes: Iterable[str]) -> InstalledAppFlow:
+        if self.oauth_client_secrets_file:
+            return InstalledAppFlow.from_client_secrets_file(
+                str(self.oauth_client_secrets_file),
+                list(scopes),
+            )
+        if self.oauth_client_config_json:
+            return InstalledAppFlow.from_client_config(
+                json.loads(self.oauth_client_config_json),
+                list(scopes),
+            )
+        raise RuntimeError(
+            "No OAuth client credentials are configured. Set GOOGLE_OAUTH_CLIENT_SECRETS_FILE "
+            "or GOOGLE_OAUTH_CLIENT_CONFIG_JSON."
+        )
+
+    def _save_user_credentials(self, credentials: UserOAuthCredentials) -> None:
+        self.oauth_token_file.parent.mkdir(parents=True, exist_ok=True)
+        self.oauth_token_file.write_text(credentials.to_json(), encoding="utf-8")
+
+    def run_oauth_login(
+        self,
+        scopes: Iterable[str] | None = None,
+        *,
+        open_browser: bool | None = None,
+        port: int | None = None,
+    ) -> dict[str, Any]:
+        requested_scopes = list(scopes or DEFAULT_READONLY_SCOPES)
+        flow = self._oauth_flow(requested_scopes)
+        credentials = flow.run_local_server(
+            port=self.oauth_local_server_port if port is None else port,
+            open_browser=self.oauth_open_browser if open_browser is None else open_browser,
+            authorization_prompt_message="Open this URL in your browser to authorize access: {url}",
+            success_message="Google Workspace MCP authorization completed. You can close this window.",
+        )
+        self._save_user_credentials(credentials)
+        self._user_credentials.clear()
+        return {
+            "oauth_token_file": str(self.oauth_token_file),
+            "scopes": requested_scopes,
+            "account": getattr(credentials, "account", None),
+            "has_refresh_token": bool(credentials.refresh_token),
+        }
+
+    def _user_oauth_credentials(self, scopes: Iterable[str]) -> UserOAuthCredentials:
+        scope_list = tuple(sorted(set(scopes)))
+        credentials = self._user_credentials.get(scope_list)
+        if credentials is not None and credentials.valid and credentials.token:
+            return credentials
+
+        if not self._oauth_client_is_configured():
+            raise RuntimeError(
+                "No OAuth client configuration found. Set GOOGLE_OAUTH_CLIENT_SECRETS_FILE or "
+                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON, then run `google-workspace-mcp auth`."
+            )
+
+        if not self.oauth_token_file.exists():
+            raise RuntimeError(
+                "OAuth client credentials are configured, but no cached user token was found. "
+                "Run `google-workspace-mcp auth` to complete the browser login flow."
+            )
+
+        credentials = UserOAuthCredentials.from_authorized_user_file(
+            str(self.oauth_token_file),
+            list(scope_list),
+        )
+
+        if credentials.expired and credentials.refresh_token:
+            credentials.refresh(GoogleAuthRequest())
+            self._save_user_credentials(credentials)
+
+        if not credentials.valid or not credentials.token:
+            raise RuntimeError(
+                "The cached OAuth token is invalid or missing. Run `google-workspace-mcp auth` again."
+            )
+
+        self._user_credentials[scope_list] = credentials
+        return credentials
+
     def _auth_headers(self, scopes: Iterable[str], allow_api_key: bool) -> tuple[dict[str, str], dict[str, str]]:
         scope_list = tuple(sorted(set(scopes)))
         headers: dict[str, str] = {}
@@ -244,6 +360,11 @@ class GoogleWorkspaceClient:
 
         if self.oauth_access_token:
             headers["Authorization"] = f"Bearer {self.oauth_access_token}"
+            return headers, params
+
+        if scope_list and self._oauth_client_is_configured():
+            credentials = self._user_oauth_credentials(scope_list)
+            headers["Authorization"] = f"Bearer {credentials.token}"
             return headers, params
 
         if scope_list and (self.service_account_file or self.service_account_json):
@@ -265,8 +386,8 @@ class GoogleWorkspaceClient:
             mode = "requires GOOGLE_API_KEY or credentials with read access"
         raise RuntimeError(
             "No valid Google credentials are configured. "
-            f"This operation {mode}. Use a service account or OAuth token for Docs/Drive, "
-            "or GOOGLE_API_KEY for public Sheets."
+            f"This operation {mode}. Use an OAuth desktop client, service account, or OAuth token "
+            "for private Docs/Drive, or GOOGLE_API_KEY for public Sheets."
         )
 
     def _request(
@@ -1264,9 +1385,80 @@ def export_google_file(
     }
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Google Workspace MCP server")
+    subparsers = parser.add_subparsers(dest="command")
+
+    auth_parser = subparsers.add_parser(
+        "auth",
+        help="Run the OAuth desktop login flow or inspect cached OAuth status.",
+    )
+    auth_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=("login", "status"),
+        default="login",
+        help="Choose `login` to launch the browser flow or `status` to inspect the current setup.",
+    )
+    auth_parser.add_argument(
+        "--client-secrets",
+        dest="client_secrets",
+        help="Path to the OAuth client secrets JSON file.",
+    )
+    auth_parser.add_argument(
+        "--token-file",
+        dest="token_file",
+        help="Path where the OAuth token cache should be stored.",
+    )
+    auth_parser.add_argument(
+        "--scope",
+        dest="scopes",
+        action="append",
+        help="Additional scope to request. Repeat for multiple scopes.",
+    )
+    auth_parser.add_argument(
+        "--port",
+        dest="port",
+        type=int,
+        help="Local callback port for the OAuth browser flow. Defaults to the Google-assigned port.",
+    )
+    auth_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open the browser. The authorization URL will still be printed.",
+    )
+
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    if args.command == "auth":
+        client = get_client()
+        if args.client_secrets:
+            client.oauth_client_secrets_file = Path(args.client_secrets)
+            client.oauth_client_config_json = None
+        if args.token_file:
+            client.oauth_token_file = Path(args.token_file)
+
+        if args.action == "status":
+            print(json.dumps(client.auth_summary(), indent=2))
+            return
+
+        try:
+            result = client.run_oauth_login(
+                scopes=args.scopes or DEFAULT_READONLY_SCOPES,
+                open_browser=not args.no_browser,
+                port=args.port,
+            )
+            print(json.dumps(result, indent=2))
+            return
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
     mcp.run()
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

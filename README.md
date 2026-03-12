@@ -11,6 +11,34 @@ Python MCP server for reading Google Docs and Google Sheets with structured outp
 
 ## Authentication Options
 
+### Recommended for private files shared to your Google account: OAuth desktop client
+
+Use a Google OAuth client ID for Desktop App if the files are private but shared to your personal Google account.
+
+1. Enable:
+   - Google Sheets API
+   - Google Docs API
+   - Google Drive API
+2. Create an OAuth client ID with application type `Desktop app`.
+3. Download the client secret JSON.
+4. Set:
+
+```powershell
+$env:GOOGLE_OAUTH_CLIENT_SECRETS_FILE="C:\path\to\oauth-client-secret.json"
+```
+
+5. Run the one-time browser login flow:
+
+```powershell
+google-workspace-mcp auth
+```
+
+This stores a refreshable token by default at:
+
+```powershell
+$HOME\.google-workspace-mcp\oauth-token.json
+```
+
 ### Recommended: service account
 
 Use a Google Cloud service account for the most reliable setup.
@@ -87,6 +115,18 @@ Or, if you installed it directly from GitHub:
 google-workspace-mcp
 ```
 
+To bootstrap OAuth for a private user account:
+
+```powershell
+google-workspace-mcp auth
+```
+
+To inspect the current auth setup:
+
+```powershell
+google-workspace-mcp auth status
+```
+
 ## Codex MCP Configuration
 
 ```json
@@ -96,7 +136,8 @@ google-workspace-mcp
       "command": "C:/Users/Admin/google-workspace-mcp/.venv/Scripts/python.exe",
       "args": ["C:/Users/Admin/google-workspace-mcp/mcp_google_workspace.py"],
       "env": {
-        "GOOGLE_SERVICE_ACCOUNT_FILE": "C:/path/to/service-account.json"
+        "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/path/to/oauth-client-secret.json",
+        "GOOGLE_OAUTH_TOKEN_FILE": "C:/Users/Admin/.google-workspace-mcp/oauth-token.json"
       }
     }
   }
@@ -119,7 +160,8 @@ If you installed the package directly from GitHub into an environment on your PA
     "google-workspace": {
       "command": "google-workspace-mcp",
       "env": {
-        "GOOGLE_SERVICE_ACCOUNT_FILE": "C:/path/to/service-account.json"
+        "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/path/to/oauth-client-secret.json",
+        "GOOGLE_OAUTH_TOKEN_FILE": "C:/Users/Admin/.google-workspace-mcp/oauth-token.json"
       }
     }
   }
@@ -217,4 +259,6 @@ download_google_doc_images(
 - Google Docs image metadata is available directly through the Docs API, so document extraction is strong.
 - Google Sheets does not expose over-grid images as cleanly as cell data, so this server uses XLSX export to recover them.
 - In-cell `IMAGE("...")` formulas are detected separately from exported drawing images.
-- Private files usually require a service account or OAuth token. An API key is often not enough.
+- Private files shared to your user account should use the OAuth desktop client flow.
+- Private files shared to a robot identity should use a service account.
+- An API key is only suitable for public Sheets.
