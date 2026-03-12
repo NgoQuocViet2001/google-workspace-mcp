@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-workspace-mcp"
+version = "0.1.0"
+description = "MCP server for reading Google Docs and Google Sheets with structured output and image extraction."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp",
+  "requests",
+  "google-auth",
+]
+
+[project.scripts]
+google-workspace-mcp = "mcp_google_workspace:main"
+
+[tool.setuptools]
+py-modules = ["mcp_google_workspace"]
