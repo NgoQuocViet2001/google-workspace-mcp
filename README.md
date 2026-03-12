@@ -39,6 +39,18 @@ This stores a refreshable token by default at:
 $HOME\.google-workspace-mcp\oauth-token.json
 ```
 
+Use this to inspect the cached token scopes and see which scopes are still missing:
+
+```powershell
+google-workspace-mcp auth status
+```
+
+If you need to overwrite the cached token with a specific client secret file and token path, you can also run:
+
+```powershell
+google-workspace-mcp auth login --client-secrets C:\path\to\oauth-client-secret.json --token-file C:\path\to\oauth-token.json
+```
+
 ### Recommended: service account
 
 Use a Google Cloud service account for the most reliable setup.
@@ -187,6 +199,8 @@ If you installed the package directly from GitHub into an environment on your PA
 
 Replace placeholders such as `<spreadsheet-id>`, `<sheet-name>`, and `<output-dir>` with your own values.
 
+Google Sheets URLs with `gid` and `range` are resolved automatically. If the caller omits the sheet prefix, the server uses the tab identified by `gid`.
+
 ### Read one row from a sheet
 
 ```text
@@ -199,6 +213,14 @@ get_sheet_row(
 ```
 
 `read_sheet_values` also accepts row-style input such as `<sheet-name>!42:42` and normalizes it to a valid full-row A1 range automatically.
+
+### Read directly from a Sheets URL with `gid` and `range`
+
+```text
+read_sheet_values(
+  "https://docs.google.com/spreadsheets/d/<spreadsheet-id>/edit?gid=<gid>#gid=<gid>&range=38:38"
+)
+```
 
 ### Read grid data with formulas, notes, and links
 
@@ -217,6 +239,8 @@ search_sheet(
   "login"
 )
 ```
+
+If you pass a Sheets URL with `gid`, `search_sheet()` searches only that tab by default instead of scanning the full workbook.
 
 ### Convert a sheet to JSON
 

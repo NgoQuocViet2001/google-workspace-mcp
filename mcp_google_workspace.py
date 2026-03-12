@@ -6,10 +6,13 @@ import os
 import re
 import sys
 import tempfile
+import time
 import zipfile
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlparse
 from xml.etree import ElementTree as ET
 
 import requests
@@ -101,6 +104,16 @@ def default_oauth_token_file() -> Path:
     return Path.home() / ".google-workspace-mcp" / "oauth-token.json"
 
 
+def normalize_scopes(raw_scopes: Any) -> list[str]:
+    if raw_scopes is None:
+        return []
+    if isinstance(raw_scopes, str):
+        return sorted({scope for scope in re.split(r"[\s,]+", raw_scopes) if scope})
+    if isinstance(raw_scopes, (list, tuple, set)):
+        return sorted({str(scope).strip() for scope in raw_scopes if str(scope).strip()})
+    return []
+
+
 def extract_file_id(value: str, kind: str | None = None) -> str:
     value = value.strip()
     if kind == "doc":
@@ -123,6 +136,40 @@ def extract_file_id(value: str, kind: str | None = None) -> str:
     if ID_RE.match(value):
         return value
     raise ValueError(f"Could not extract a Google file ID from: {value}")
+
+
+def detect_google_file_kind(value: str) -> str | None:
+    trimmed = value.strip()
+    if DOC_URL_RE.search(trimmed):
+        return "doc"
+    if SHEET_URL_RE.search(trimmed):
+        return "sheet"
+    if DRIVE_FILE_RE.search(trimmed) or DRIVE_OPEN_RE.search(trimmed):
+        return "drive"
+    return None
+
+
+def parse_sheet_url_context(value: str) -> dict[str, Any]:
+    spreadsheet_id = extract_file_id(value, kind="sheet")
+    if not SHEET_URL_RE.search(value):
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "gid": None,
+            "range_a1": None,
+        }
+
+    parsed = urlparse(value)
+    params: dict[str, str] = {}
+    for segment in (parsed.query, parsed.fragment):
+        params.update(dict(parse_qsl(segment, keep_blank_values=True)))
+    gid_text = params.get("gid", "").strip()
+    range_a1 = params.get("range", "").strip() or None
+    gid = int(gid_text) if gid_text.isdigit() else None
+    return {
+        "spreadsheet_id": spreadsheet_id,
+        "gid": gid,
+        "range_a1": range_a1,
+    }
 
 
 def quote_range(range_a1: str) -> str:
@@ -238,8 +285,39 @@ class GoogleWorkspaceClient:
         self._base_service_account: ServiceAccountCredentials | None = None
         self._scoped_credentials: dict[tuple[str, ...], ServiceAccountCredentials] = {}
         self._user_credentials: dict[tuple[str, ...], UserOAuthCredentials] = {}
+        self._sheet_metadata_cache: dict[str, dict[str, Any]] = {}
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "google-workspace-mcp/1.0"})
+
+    def _cached_oauth_token_payload(self) -> dict[str, Any] | None:
+        if not self.oauth_token_file.exists():
+            return None
+        try:
+            data = json.loads(self.oauth_token_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _cached_oauth_token_format(self) -> str | None:
+        payload = self._cached_oauth_token_payload()
+        if not payload:
+            return None
+        if "installed" in payload or "web" in payload:
+            return "oauth_client_secret"
+        required = {"client_id", "client_secret", "refresh_token"}
+        if required.issubset(payload):
+            return "authorized_user"
+        return "unknown_json"
+
+    def _cached_oauth_token_scopes(self) -> list[str]:
+        payload = self._cached_oauth_token_payload()
+        if not payload:
+            return []
+        return normalize_scopes(payload.get("scopes"))
+
+    def _missing_cached_oauth_scopes(self, required_scopes: Iterable[str]) -> list[str]:
+        cached_scopes = set(self._cached_oauth_token_scopes())
+        return [scope for scope in sorted(set(required_scopes)) if scope not in cached_scopes]
 
     def auth_summary(self) -> dict[str, Any]:
         oauth_client_ready = bool(self.oauth_client_secrets_file or self.oauth_client_config_json)
@@ -254,6 +332,7 @@ class GoogleWorkspaceClient:
             service_account_source = str(self.service_account_file)
         elif self.service_account_json:
             service_account_source = "GOOGLE_SERVICE_ACCOUNT_JSON"
+        cached_oauth_scopes = self._cached_oauth_token_scopes()
         return {
             "api_key_configured": bool(self.api_key),
             "oauth_access_token_configured": bool(self.oauth_access_token),
@@ -261,9 +340,13 @@ class GoogleWorkspaceClient:
             "oauth_client_source": oauth_client_source,
             "oauth_token_file": str(self.oauth_token_file),
             "oauth_token_cached": self.oauth_token_file.exists(),
+            "oauth_token_format": self._cached_oauth_token_format(),
+            "oauth_token_scopes": cached_oauth_scopes,
+            "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_READONLY_SCOPES),
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,
             "recommended_mode": self._recommended_mode(),
+            "active_auth_mode": self._active_auth_mode(),
             "notes": [
                 "Public Sheets can be read with GOOGLE_API_KEY.",
                 "OAuth desktop client credentials can read private files shared to your Google account.",
@@ -277,6 +360,19 @@ class GoogleWorkspaceClient:
             return "oauth_access_token"
         if self.oauth_client_secrets_file or self.oauth_client_config_json:
             return "oauth_client"
+        if self.service_account_file or self.service_account_json:
+            return "service_account"
+        if self.api_key:
+            return "api_key_public_only"
+        return "missing_credentials"
+
+    def _active_auth_mode(self) -> str:
+        if self.oauth_access_token:
+            return "oauth_access_token"
+        if self._oauth_client_is_configured():
+            if self.oauth_token_file.exists():
+                return "oauth_client_cached_token"
+            return "oauth_client_not_authorized"
         if self.service_account_file or self.service_account_json:
             return "service_account"
         if self.api_key:
@@ -347,6 +443,84 @@ class GoogleWorkspaceClient:
             "has_refresh_token": bool(credentials.refresh_token),
         }
 
+    def _sheet_properties_by_title(
+        self,
+        metadata: dict[str, Any],
+        sheet_name: str | None,
+    ) -> dict[str, Any] | None:
+        if not sheet_name:
+            return None
+        requested_name = unquote_sheet_title(sheet_name)
+        for sheet in metadata.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == requested_name:
+                return properties
+        return None
+
+    def _sheet_properties_by_gid(
+        self,
+        metadata: dict[str, Any],
+        gid: int | None,
+    ) -> dict[str, Any] | None:
+        if gid is None:
+            return None
+        for sheet in metadata.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("sheetId") == gid:
+                return properties
+        return None
+
+    def resolve_sheet_range_context(
+        self,
+        spreadsheet_id_or_url: str,
+        *,
+        range_a1: str | None = None,
+        sheet_name: str | None = None,
+    ) -> dict[str, Any]:
+        spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
+        metadata = self.get_sheet_metadata(spreadsheet_id)
+        url_context = parse_sheet_url_context(spreadsheet_id_or_url)
+        explicit_range = range_a1.strip() if range_a1 else None
+        range_sheet_name, range_body = split_sheet_range(explicit_range) if explicit_range else (None, None)
+
+        resolved_properties = (
+            self._sheet_properties_by_title(metadata, sheet_name)
+            or self._sheet_properties_by_title(metadata, range_sheet_name)
+            or self._sheet_properties_by_gid(metadata, url_context.get("gid"))
+        )
+        default_properties = resolved_properties
+        if default_properties is None:
+            sheets = metadata.get("sheets", [])
+            if sheets:
+                default_properties = sheets[0].get("properties", {})
+
+        effective_range = explicit_range or url_context.get("range_a1")
+        if effective_range:
+            prefix, body = split_sheet_range(effective_range)
+            is_whole_sheet_reference = (
+                resolved_properties is not None
+                and prefix is None
+                and unquote_sheet_title(body) == resolved_properties.get("title")
+            )
+            if is_whole_sheet_reference:
+                effective_range = quote_sheet_title(resolved_properties["title"])
+            elif resolved_properties and (sheet_name or prefix is None):
+                effective_range = f"{quote_sheet_title(resolved_properties['title'])}!{body}"
+        elif resolved_properties:
+            effective_range = quote_sheet_title(resolved_properties["title"])
+
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "url_context": url_context,
+            "metadata": metadata,
+            "resolved_sheet_name": resolved_properties.get("title") if resolved_properties else None,
+            "resolved_gid": resolved_properties.get("sheetId") if resolved_properties else url_context.get("gid"),
+            "resolved_range_a1": effective_range,
+            "resolved_sheet_properties": resolved_properties,
+            "default_sheet_properties": default_properties,
+            "range_body": range_body,
+        }
+
     def _user_oauth_credentials(self, scopes: Iterable[str]) -> UserOAuthCredentials:
         scope_list = tuple(sorted(set(scopes)))
         credentials = self._user_credentials.get(scope_list)
@@ -365,10 +539,24 @@ class GoogleWorkspaceClient:
                 "Run `google-workspace-mcp auth` to complete the browser login flow."
             )
 
-        credentials = UserOAuthCredentials.from_authorized_user_file(
-            str(self.oauth_token_file),
-            list(scope_list),
-        )
+        missing_scopes = self._missing_cached_oauth_scopes(scope_list)
+        if missing_scopes:
+            missing_display = ", ".join(missing_scopes)
+            raise RuntimeError(
+                "Cached OAuth token is missing required scopes: "
+                f"{missing_display}. Re-run `google-workspace-mcp auth` to refresh the token."
+            )
+
+        try:
+            credentials = UserOAuthCredentials.from_authorized_user_file(
+                str(self.oauth_token_file),
+                list(scope_list),
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "Cached OAuth token file is not in the authorized-user format. "
+                "Run `google-workspace-mcp auth` again to regenerate it."
+            ) from exc
 
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(GoogleAuthRequest())
@@ -419,6 +607,21 @@ class GoogleWorkspaceClient:
             "for private Docs/Drive, or GOOGLE_API_KEY for public Sheets."
         )
 
+    def _retry_delay_seconds(self, response: requests.Response, attempt_index_zero_based: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            retry_after = retry_after.strip()
+            if retry_after.isdigit():
+                return max(float(retry_after), 0.0)
+            try:
+                retry_after_dt = parsedate_to_datetime(retry_after)
+                if retry_after_dt.tzinfo is None:
+                    retry_after_dt = retry_after_dt.replace(tzinfo=timezone.utc)
+                return max((retry_after_dt - datetime.now(timezone.utc)).total_seconds(), 0.0)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return min(2**attempt_index_zero_based, 8.0)
+
     def _request(
         self,
         method: str,
@@ -431,13 +634,19 @@ class GoogleWorkspaceClient:
     ) -> Any:
         headers, auth_params = self._auth_headers(scopes, allow_api_key)
         final_params = {**auth_params, **(params or {})}
-        response = self.session.request(
-            method,
-            url,
-            params=final_params,
-            headers=headers,
-            timeout=self.timeout,
-        )
+        response: requests.Response | None = None
+        for attempt_index in range(4):
+            response = self.session.request(
+                method,
+                url,
+                params=final_params,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            if response.ok or response.status_code not in {429, 500, 502, 503, 504} or attempt_index == 3:
+                break
+            time.sleep(self._retry_delay_seconds(response, attempt_index))
+        assert response is not None
         if not response.ok:
             error_message = response.text
             try:
@@ -456,7 +665,10 @@ class GoogleWorkspaceClient:
 
     def get_sheet_metadata(self, spreadsheet_id_or_url: str) -> dict[str, Any]:
         spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
-        return self._request(
+        cached = self._sheet_metadata_cache.get(spreadsheet_id)
+        if cached is not None:
+            return cached
+        metadata = self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}",
             scopes=[SHEETS_SCOPE],
@@ -468,19 +680,8 @@ class GoogleWorkspaceClient:
                 "sheets.properties.gridProperties.columnCount"
             },
         )
-
-    def _sheet_grid_limits(self, spreadsheet_id_or_url: str, sheet_name: str | None) -> tuple[int | None, int | None]:
-        metadata = self.get_sheet_metadata(spreadsheet_id_or_url)
-        sheets = metadata.get("sheets", [])
-        if not sheets:
-            return None, None
-        requested_name = unquote_sheet_title(sheet_name) if sheet_name else None
-        for sheet in sheets:
-            properties = sheet.get("properties", {})
-            if requested_name is None or properties.get("title") == requested_name:
-                grid = properties.get("gridProperties", {})
-                return grid.get("rowCount"), grid.get("columnCount")
-        return None, None
+        self._sheet_metadata_cache[spreadsheet_id] = metadata
+        return metadata
 
     def get_drive_file(self, file_id_or_url: str) -> dict[str, Any]:
         file_id = extract_file_id(file_id_or_url)
@@ -519,18 +720,25 @@ class GoogleWorkspaceClient:
     def get_sheet_values(
         self,
         spreadsheet_id_or_url: str,
-        range_a1: str,
+        range_a1: str | None,
         major_dimension: str,
         value_render_option: str,
         date_time_render_option: str,
     ) -> dict[str, Any]:
-        spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
-        sheet_name, _ = split_sheet_range(range_a1)
-        _, column_count = self._sheet_grid_limits(spreadsheet_id_or_url, sheet_name)
+        context = self.resolve_sheet_range_context(spreadsheet_id_or_url, range_a1=range_a1)
+        if not context["resolved_range_a1"]:
+            raise ValueError(
+                "No A1 range could be resolved. Pass `range_a1` explicitly or include `gid`/`range` in the sheet URL."
+            )
+        spreadsheet_id = context["spreadsheet_id"]
+        active_properties = context["resolved_sheet_properties"] or context["default_sheet_properties"] or {}
+        column_count = active_properties.get("gridProperties", {}).get("columnCount")
         max_column_a1 = (
             column_to_a1(column_count - 1) if column_count and column_count > 0 else MAX_SHEET_COLUMN_A1
         )
-        encoded_range = quote_range(normalize_values_range(range_a1, max_column_a1=max_column_a1))
+        encoded_range = quote_range(
+            normalize_values_range(context["resolved_range_a1"], max_column_a1=max_column_a1)
+        )
         return self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}",
@@ -546,21 +754,32 @@ class GoogleWorkspaceClient:
     def get_sheet_grid(
         self,
         spreadsheet_id_or_url: str,
-        range_a1: str,
+        range_a1: str | None,
         *,
         fields: str = SHEET_GRID_FIELDS,
     ) -> dict[str, Any]:
-        spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
+        context = self.resolve_sheet_range_context(spreadsheet_id_or_url, range_a1=range_a1)
+        spreadsheet_id = context["spreadsheet_id"]
+        active_properties = context["resolved_sheet_properties"] or context["default_sheet_properties"] or {}
+        column_count = active_properties.get("gridProperties", {}).get("columnCount")
+        max_column_a1 = (
+            column_to_a1(column_count - 1) if column_count and column_count > 0 else MAX_SHEET_COLUMN_A1
+        )
+        params = {
+            "includeGridData": "true",
+            "fields": fields,
+        }
+        if context["resolved_range_a1"]:
+            params["ranges"] = normalize_values_range(
+                context["resolved_range_a1"],
+                max_column_a1=max_column_a1,
+            )
         return self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}",
             scopes=[SHEETS_SCOPE],
             allow_api_key=True,
-            params={
-                "ranges": range_a1,
-                "includeGridData": "true",
-                "fields": fields,
-            },
+            params=params,
         )
 
 
@@ -1144,21 +1363,57 @@ def diagnose_google_auth() -> dict[str, Any]:
 def resolve_google_file(file_id_or_url: str) -> dict[str, Any]:
     """Resolve basic metadata for a Google Docs, Sheets, or Drive file."""
     client = get_client()
-    metadata = client.get_drive_file(file_id_or_url)
-    return {
-        "id": metadata.get("id"),
-        "name": metadata.get("name"),
-        "mime_type": metadata.get("mimeType"),
-        "web_view_link": metadata.get("webViewLink"),
-        "owners": metadata.get("owners", []),
-        "has_export_links": bool(metadata.get("exportLinks")),
-    }
+    try:
+        metadata = client.get_drive_file(file_id_or_url)
+        return {
+            "id": metadata.get("id"),
+            "name": metadata.get("name"),
+            "mime_type": metadata.get("mimeType"),
+            "web_view_link": metadata.get("webViewLink"),
+            "owners": metadata.get("owners", []),
+            "has_export_links": bool(metadata.get("exportLinks")),
+        }
+    except RuntimeError as exc:
+        error_text = str(exc).lower()
+        if "insufficient authentication scopes" not in error_text and "drive.readonly" not in error_text:
+            raise
+
+        file_kind = detect_google_file_kind(file_id_or_url)
+        if file_kind == "sheet":
+            metadata = client.get_sheet_metadata(file_id_or_url)
+            spreadsheet_id = metadata.get("spreadsheetId") or extract_file_id(file_id_or_url, kind="sheet")
+            return {
+                "id": spreadsheet_id,
+                "name": metadata.get("properties", {}).get("title"),
+                "mime_type": "application/vnd.google-apps.spreadsheet",
+                "web_view_link": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+                "owners": [],
+                "has_export_links": False,
+                "auth_warning": "Cached OAuth token is missing drive.readonly; rerun auth if you need Drive metadata.",
+                "source": "sheets_metadata_fallback",
+            }
+        if file_kind == "doc":
+            document = client.get_doc(file_id_or_url)
+            document_id = extract_file_id(file_id_or_url, kind="doc")
+            return {
+                "id": document_id,
+                "name": document.get("title"),
+                "mime_type": "application/vnd.google-apps.document",
+                "web_view_link": f"https://docs.google.com/document/d/{document_id}/edit",
+                "owners": [],
+                "has_export_links": False,
+                "auth_warning": "Cached OAuth token is missing drive.readonly; rerun auth if you need Drive metadata.",
+                "source": "docs_metadata_fallback",
+            }
+        raise RuntimeError(
+            "Cached OAuth token is missing drive.readonly. Re-run `google-workspace-mcp auth` to refresh the token."
+        ) from exc
 
 
 @mcp.tool()
 def read_sheet_values(
     spreadsheet_id_or_url: str,
-    range_a1: str,
+    range_a1: str | None = None,
     major_dimension: str = "ROWS",
     value_render_option: str = "FORMATTED_VALUE",
     date_time_render_option: str = "SERIAL_NUMBER",
@@ -1182,7 +1437,7 @@ def read_sheet_values(
 
 
 @mcp.tool()
-def read_sheet_grid(spreadsheet_id_or_url: str, range_a1: str) -> dict[str, Any]:
+def read_sheet_grid(spreadsheet_id_or_url: str, range_a1: str | None = None) -> dict[str, Any]:
     """Read Google Sheets grid data including formatted values, formulas, notes, and links."""
     client = get_client()
     payload = client.get_sheet_grid(spreadsheet_id_or_url, range_a1)
@@ -1196,12 +1451,17 @@ def read_sheet_grid(spreadsheet_id_or_url: str, range_a1: str) -> dict[str, Any]
 @mcp.tool()
 def get_sheet_row(
     spreadsheet_id_or_url: str,
-    sheet_name: str,
+    sheet_name: str | None,
     row_index: int,
     header_row: int = 1,
 ) -> dict[str, Any]:
     """Fetch one Google Sheets row and map it to the header row."""
     client = get_client()
+    if not sheet_name:
+        context = client.resolve_sheet_range_context(spreadsheet_id_or_url)
+        sheet_name = context["resolved_sheet_name"]
+    if not sheet_name:
+        raise ValueError("Pass `sheet_name` explicitly or use a Google Sheets URL with `gid`.")
     header_payload = client.get_sheet_values(
         spreadsheet_id_or_url,
         f"{quote_sheet_title(sheet_name)}!{header_row}:{header_row}",
@@ -1241,8 +1501,12 @@ def search_sheet(
     if sheet_name:
         sheet_names = [sheet_name]
     else:
-        metadata = client.get_sheet_metadata(spreadsheet_id_or_url)
-        sheet_names = [sheet["properties"]["title"] for sheet in metadata.get("sheets", [])]
+        context = client.resolve_sheet_range_context(spreadsheet_id_or_url)
+        if context["resolved_sheet_name"]:
+            sheet_names = [context["resolved_sheet_name"]]
+        else:
+            metadata = context["metadata"]
+            sheet_names = [sheet["properties"]["title"] for sheet in metadata.get("sheets", [])]
     needle_cmp = needle if case_sensitive else needle.lower()
     matches = []
     for current_sheet_name in sheet_names:
@@ -1281,13 +1545,18 @@ def search_sheet(
 @mcp.tool()
 def sheet_to_json(
     spreadsheet_id_or_url: str,
-    sheet_name: str,
+    sheet_name: str | None,
     header_row: int = 1,
     start_row: int | None = None,
     end_row: int | None = None,
 ) -> dict[str, Any]:
     """Convert a Google Sheets tab into JSON records using the header row."""
     client = get_client()
+    if not sheet_name:
+        context = client.resolve_sheet_range_context(spreadsheet_id_or_url)
+        sheet_name = context["resolved_sheet_name"]
+    if not sheet_name:
+        raise ValueError("Pass `sheet_name` explicitly or use a Google Sheets URL with `gid`.")
     start = start_row or header_row
     if end_row:
         range_a1 = f"{quote_sheet_title(sheet_name)}!{start}:{end_row}"
