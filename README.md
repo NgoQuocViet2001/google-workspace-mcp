@@ -195,6 +195,8 @@ get_sheet_row(
 )
 ```
 
+`read_sheet_values` also accepts row-style input such as `Sheet1!129:129` and normalizes it to a valid full-row A1 range automatically.
+
 ### Read grid data with formulas, notes, and links
 
 ```text

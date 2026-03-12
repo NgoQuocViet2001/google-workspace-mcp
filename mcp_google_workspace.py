@@ -32,6 +32,8 @@ DRIVE_FILE_RE = re.compile(r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)
 DRIVE_OPEN_RE = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
 IMAGE_FORMULA_RE = re.compile(r'(?is)^=IMAGE\(\s*"([^"]+)"')
 ID_RE = re.compile(r"^[a-zA-Z0-9_-]{15,}$")
+ROW_ONLY_RANGE_RE = re.compile(r"^\d+(?::\d+)?$")
+MAX_SHEET_COLUMN_A1 = "ZZZ"
 
 SHEET_GRID_FIELDS = ",".join(
     [
@@ -124,12 +126,39 @@ def extract_file_id(value: str, kind: str | None = None) -> str:
 
 
 def quote_range(range_a1: str) -> str:
-    return quote(range_a1, safe="!'():,$")
+    return quote(range_a1, safe="!():,$")
 
 
 def quote_sheet_title(sheet_name: str) -> str:
     escaped = sheet_name.replace("'", "''")
     return f"'{escaped}'"
+
+
+def unquote_sheet_title(sheet_name: str) -> str:
+    if len(sheet_name) >= 2 and sheet_name[0] == "'" and sheet_name[-1] == "'":
+        return sheet_name[1:-1].replace("''", "'")
+    return sheet_name
+
+
+def split_sheet_range(range_a1: str) -> tuple[str | None, str]:
+    trimmed = range_a1.strip()
+    if "!" not in trimmed:
+        return None, trimmed
+    sheet_name, body = trimmed.split("!", 1)
+    return sheet_name, body.strip()
+
+
+def normalize_values_range(range_a1: str, *, max_column_a1: str = MAX_SHEET_COLUMN_A1) -> str:
+    trimmed = range_a1.strip()
+    sheet_name, body = split_sheet_range(trimmed)
+    sheet_prefix = f"{sheet_name}!" if sheet_name else ""
+    if not ROW_ONLY_RANGE_RE.fullmatch(body):
+        return trimmed
+    if ":" in body:
+        start_row, end_row = body.split(":", 1)
+    else:
+        start_row = end_row = body
+    return f"{sheet_prefix}A{start_row}:{max_column_a1}{end_row}"
 
 
 def column_to_a1(column_index_zero_based: int) -> str:
@@ -434,9 +463,24 @@ class GoogleWorkspaceClient:
             allow_api_key=True,
             params={
                 "fields": "spreadsheetId,properties.title,sheets.properties.sheetId,"
-                "sheets.properties.title,sheets.properties.index"
+                "sheets.properties.title,sheets.properties.index,"
+                "sheets.properties.gridProperties.rowCount,"
+                "sheets.properties.gridProperties.columnCount"
             },
         )
+
+    def _sheet_grid_limits(self, spreadsheet_id_or_url: str, sheet_name: str | None) -> tuple[int | None, int | None]:
+        metadata = self.get_sheet_metadata(spreadsheet_id_or_url)
+        sheets = metadata.get("sheets", [])
+        if not sheets:
+            return None, None
+        requested_name = unquote_sheet_title(sheet_name) if sheet_name else None
+        for sheet in sheets:
+            properties = sheet.get("properties", {})
+            if requested_name is None or properties.get("title") == requested_name:
+                grid = properties.get("gridProperties", {})
+                return grid.get("rowCount"), grid.get("columnCount")
+        return None, None
 
     def get_drive_file(self, file_id_or_url: str) -> dict[str, Any]:
         file_id = extract_file_id(file_id_or_url)
@@ -481,7 +525,12 @@ class GoogleWorkspaceClient:
         date_time_render_option: str,
     ) -> dict[str, Any]:
         spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
-        encoded_range = quote_range(range_a1)
+        sheet_name, _ = split_sheet_range(range_a1)
+        _, column_count = self._sheet_grid_limits(spreadsheet_id_or_url, sheet_name)
+        max_column_a1 = (
+            column_to_a1(column_count - 1) if column_count and column_count > 0 else MAX_SHEET_COLUMN_A1
+        )
+        encoded_range = quote_range(normalize_values_range(range_a1, max_column_a1=max_column_a1))
         return self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}",
