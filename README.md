@@ -9,6 +9,21 @@ Python MCP server for reading Google Docs and Google Sheets with structured outp
 - Extracts over-grid sheet images from `Drive export -> XLSX`.
 - Detects in-cell `IMAGE("...")` formulas separately from drawing exports.
 
+## Project Layout
+
+```text
+google_workspace_mcp/
+  cli.py        # command-line entrypoint
+  client.py     # Google API auth + HTTP client
+  common.py     # shared constants and parsing helpers
+  docs.py       # Google Docs normalization helpers
+  server.py     # FastMCP server instance
+  sheets.py     # Google Sheets normalization helpers
+  tools.py      # MCP tool definitions
+mcp_google_workspace.py  # compatibility wrapper for local scripts/config
+tests/
+```
+
 ## Authentication Options
 
 ### Recommended for private files shared to your Google account: OAuth desktop client

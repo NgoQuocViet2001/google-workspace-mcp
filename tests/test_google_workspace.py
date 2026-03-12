@@ -132,8 +132,8 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         )
         client.get_sheet_grid = Mock(return_value={"sheets": []})
 
-        with patch.object(workspace, "get_client", return_value=client):
-            with patch.object(workspace, "simplify_grid_data", return_value=[]):
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            with patch("google_workspace_mcp.tools.simplify_grid_data", return_value=[]):
                 result = workspace.search_sheet(
                     "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOp/edit?gid=1436003411",
                     "needle",
@@ -213,7 +213,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             }
         )
 
-        with patch.object(workspace, "get_client", return_value=client):
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
             resolved = workspace.resolve_google_file(
                 "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOp/edit?gid=1544244212"
             )
