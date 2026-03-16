@@ -222,6 +222,64 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(resolved["name"], "Spec Workbook")
         self.assertIn("drive.readonly", resolved["auth_warning"])
 
+    def test_annotate_formatted_text_marks_strikethrough_and_underline_segments(self) -> None:
+        annotated = workspace.annotate_formatted_text(
+            "Thời gian đăng kí chốt",
+            [
+                {},
+                {"start_index": 10, "format": {"strikethrough": True}},
+                {"start_index": 17},
+                {"start_index": 18, "format": {"underline": True}},
+            ],
+        )
+
+        self.assertEqual(
+            annotated,
+            "Thời gian [[STRIKE]]đăng kí[[/STRIKE]] [[UNDERLINE]]chốt[[/UNDERLINE]]",
+        )
+
+    def test_simplify_grid_data_includes_annotated_text_for_styled_cells(self) -> None:
+        payload = {
+            "sheets": [
+                {
+                    "properties": {
+                        "sheetId": 1544244212,
+                        "title": "Spec",
+                        "index": 0,
+                        "gridProperties": {"rowCount": 100, "columnCount": 20},
+                    },
+                    "data": [
+                        {
+                            "startRow": 37,
+                            "startColumn": 9,
+                            "rowData": [
+                                {
+                                    "values": [
+                                        {
+                                            "formattedValue": "登録日時\n確定日時\n",
+                                            "userEnteredValue": {"stringValue": "登録日時\n確定日時\n"},
+                                            "effectiveValue": {"stringValue": "登録日時\n確定日時\n"},
+                                            "textFormatRuns": [
+                                                {"startIndex": 0, "format": {"strikethrough": True}},
+                                                {"startIndex": 5, "format": {}},
+                                            ],
+                                        }
+                                    ]
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        sheets = workspace.simplify_grid_data(payload)
+        cell = sheets[0]["data"][0]["rows"][0]["cells"][0]
+
+        self.assertEqual(cell["a1"], "J38")
+        self.assertEqual(cell["annotated_text"], "[[STRIKE]]登録日時\n[[/STRIKE]]確定日時\n")
+        self.assertEqual(cell["text_runs"][0]["format"]["strikethrough"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

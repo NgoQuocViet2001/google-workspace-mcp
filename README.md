@@ -6,6 +6,7 @@ Python MCP server for reading Google Docs and Google Sheets with structured outp
 
 - Reads Google Docs as structured JSON with paragraphs, tables, inline objects, positioned objects, and image metadata.
 - Reads Google Sheets values, grid data, formulas, notes, hyperlinks, and chip runs.
+- Preserves partial text styling in Sheets cells via `text_runs` and an `annotated_text` helper field for segments such as strikethrough and underline.
 - Extracts over-grid sheet images from `Drive export -> XLSX`.
 - Detects in-cell `IMAGE("...")` formulas separately from drawing exports.
 
@@ -245,6 +246,11 @@ read_sheet_grid(
   "<sheet-name>!A1:Z200"
 )
 ```
+
+For cells with partial formatting, `read_sheet_grid()` now includes:
+
+- `text_runs`: structured offsets plus style flags from Google Sheets
+- `annotated_text`: a plain-text helper string such as `[[STRIKE]]old[[/STRIKE]] new`
 
 ### Search across a sheet
 

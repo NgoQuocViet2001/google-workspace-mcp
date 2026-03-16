@@ -49,6 +49,7 @@ from .docs import (
 )
 from .server import mcp
 from .sheets import (
+    annotate_formatted_text,
     anchor_cell,
     collect_formula_images,
     extract_sheet_images_from_xlsx,
@@ -94,6 +95,7 @@ __all__ = [
     "SHEET_URL_RE",
     "XLSX_MIME",
     "a1_from_zero_based",
+    "annotate_formatted_text",
     "anchor_cell",
     "collect_formula_images",
     "column_to_a1",

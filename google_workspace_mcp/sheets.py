@@ -33,6 +33,54 @@ def simplify_text_runs(text_runs: list[dict[str, Any]] | None) -> list[dict[str,
     return output
 
 
+def _style_markers(style: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    if not style:
+        return [], []
+
+    open_markers: list[str] = []
+    close_markers: list[str] = []
+    if style.get("strikethrough"):
+        open_markers.append("[[STRIKE]]")
+        close_markers.insert(0, "[[/STRIKE]]")
+    if style.get("underline"):
+        open_markers.append("[[UNDERLINE]]")
+        close_markers.insert(0, "[[/UNDERLINE]]")
+    return open_markers, close_markers
+
+
+def annotate_formatted_text(
+    formatted_value: str | None,
+    text_runs: list[dict[str, Any]] | None,
+) -> str | None:
+    if not formatted_value:
+        return None
+    if not text_runs:
+        return None
+
+    segments = []
+    for index, run in enumerate(text_runs):
+        start_index = run.get("start_index", run.get("startIndex"))
+        if start_index is None and index == 0:
+            start_index = 0
+        if start_index is None:
+            continue
+        end_index = (
+            text_runs[index + 1].get("start_index", text_runs[index + 1].get("startIndex"))
+            if index + 1 < len(text_runs)
+            else len(formatted_value)
+        )
+        if end_index is None or end_index <= start_index:
+            continue
+        chunk = formatted_value[start_index:end_index]
+        if not chunk:
+            continue
+        open_markers, close_markers = _style_markers(run.get("format"))
+        segments.append("".join(open_markers) + chunk + "".join(close_markers))
+
+    annotated = "".join(segments)
+    return annotated if annotated != formatted_value else None
+
+
 def simplify_chip_runs(chip_runs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     result = []
     for run in chip_runs or []:
@@ -79,13 +127,15 @@ def simplify_grid_data(sheet_payload: dict[str, Any]) -> list[dict[str, Any]]:
                     effective_value = scalar_value(cell.get("effectiveValue"))
                     formula = cell.get("userEnteredValue", {}).get("formulaValue")
                     image_formula_match = IMAGE_FORMULA_RE.match(formula or "")
+                    text_runs = simplify_text_runs(cell.get("textFormatRuns"))
+                    formatted_value = cell.get("formattedValue")
                     row_cells.append(
                         compact_dict(
                             {
                                 "a1": a1_from_zero_based(start_row + row_offset, start_col + col_offset),
                                 "row_index": start_row + row_offset + 1,
                                 "column_index": start_col + col_offset + 1,
-                                "formatted_value": cell.get("formattedValue"),
+                                "formatted_value": formatted_value,
                                 "user_entered_value": user_value,
                                 "effective_value": effective_value,
                                 "formula": formula,
@@ -95,7 +145,8 @@ def simplify_grid_data(sheet_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 .get("textFormat", {})
                                 .get("link", {})
                                 .get("uri"),
-                                "text_runs": simplify_text_runs(cell.get("textFormatRuns")),
+                                "text_runs": text_runs,
+                                "annotated_text": annotate_formatted_text(formatted_value, text_runs),
                                 "chip_runs": simplify_chip_runs(cell.get("chipRuns")),
                                 "detected_image_formula_url": image_formula_match.group(1)
                                 if image_formula_match
