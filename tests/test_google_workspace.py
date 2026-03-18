@@ -198,6 +198,54 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertIn(workspace.DRIVE_SCOPE, summary["oauth_token_missing_scopes"])
         self.assertEqual(summary["active_auth_mode"], "oauth_client_cached_token")
 
+    def test_auth_headers_falls_back_to_api_key_when_cached_oauth_token_lacks_scope(self) -> None:
+        client = self.make_client({"GOOGLE_API_KEY": "public-key"})
+
+        with patch.object(
+            client,
+            "_user_oauth_credentials",
+            side_effect=RuntimeError("Cached OAuth token is missing required scopes."),
+        ), patch.object(client, "_oauth_client_is_configured", return_value=True):
+            headers, params = client._auth_headers([workspace.SHEETS_SCOPE], allow_api_key=True)
+
+        self.assertEqual(headers, {})
+        self.assertEqual(params, {"key": "public-key"})
+
+    def test_auth_headers_falls_back_to_service_account_when_cached_oauth_token_lacks_scope(self) -> None:
+        client = self.make_client()
+        client.service_account_json = "{}"
+
+        class FakeScopedCredentials:
+            def __init__(self) -> None:
+                self.valid = False
+                self.token = None
+
+            def refresh(self, _request: object) -> None:
+                self.valid = True
+                self.token = "service-account-token"
+
+        class FakeBaseCredentials:
+            def with_scopes(self, scopes: list[str] | tuple[str, ...]) -> FakeScopedCredentials:
+                self.requested_scopes = tuple(scopes)
+                return FakeScopedCredentials()
+
+        fake_base = FakeBaseCredentials()
+
+        with patch.object(
+            client,
+            "_user_oauth_credentials",
+            side_effect=RuntimeError("Cached OAuth token is missing required scopes."),
+        ), patch.object(client, "_oauth_client_is_configured", return_value=True), patch.object(
+            client,
+            "_service_account_base",
+            return_value=fake_base,
+        ):
+            headers, params = client._auth_headers([workspace.SHEETS_SCOPE], allow_api_key=False)
+
+        self.assertEqual(params, {})
+        self.assertEqual(headers["Authorization"], "Bearer service-account-token")
+        self.assertEqual(fake_base.requested_scopes, (workspace.SHEETS_SCOPE,))
+
     def test_resolve_google_file_falls_back_to_sheet_metadata_when_drive_scope_is_missing(self) -> None:
         client = self.make_client()
         client.get_drive_file = Mock(

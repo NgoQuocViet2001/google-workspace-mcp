@@ -346,29 +346,45 @@ class GoogleWorkspaceClient:
         scope_list = tuple(sorted(set(scopes)))
         headers: dict[str, str] = {}
         params: dict[str, str] = {}
+        auth_errors: list[str] = []
 
         if self.oauth_access_token:
             headers["Authorization"] = f"Bearer {self.oauth_access_token}"
             return headers, params
 
         if scope_list and self._oauth_client_is_configured():
-            credentials = self._user_oauth_credentials(scope_list)
-            headers["Authorization"] = f"Bearer {credentials.token}"
-            return headers, params
+            try:
+                credentials = self._user_oauth_credentials(scope_list)
+            except RuntimeError as exc:
+                auth_errors.append(str(exc))
+            else:
+                headers["Authorization"] = f"Bearer {credentials.token}"
+                return headers, params
 
         if scope_list and (self.service_account_file or self.service_account_json):
-            creds = self._scoped_credentials.get(scope_list)
-            if creds is None:
-                creds = self._service_account_base().with_scopes(scope_list)
-                self._scoped_credentials[scope_list] = creds
-            if not creds.valid or not creds.token:
-                creds.refresh(GoogleAuthRequest())
-            headers["Authorization"] = f"Bearer {creds.token}"
-            return headers, params
+            try:
+                creds = self._scoped_credentials.get(scope_list)
+                if creds is None:
+                    creds = self._service_account_base().with_scopes(scope_list)
+                    self._scoped_credentials[scope_list] = creds
+                if not creds.valid or not creds.token:
+                    creds.refresh(GoogleAuthRequest())
+                headers["Authorization"] = f"Bearer {creds.token}"
+                return headers, params
+            except RuntimeError as exc:
+                auth_errors.append(str(exc))
 
         if allow_api_key and self.api_key:
             params["key"] = self.api_key
             return headers, params
+
+        if auth_errors:
+            if len(auth_errors) == 1:
+                raise RuntimeError(auth_errors[0])
+            raise RuntimeError(
+                "No usable Google credentials matched the requested scopes. "
+                + " ".join(auth_errors)
+            )
 
         mode = "missing credentials"
         if allow_api_key:
