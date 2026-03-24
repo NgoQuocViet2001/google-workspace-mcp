@@ -294,6 +294,75 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertIn("not found", str(caught.exception))
         self.assertIn("apps.googleusercontent.com", str(caught.exception))
 
+    def test_run_oauth_logout_deletes_cached_token_file_and_revokes_refresh_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client({"GOOGLE_OAUTH_TOKEN_FILE": str(token_file)})
+            client._user_credentials[("scope",)] = Mock()
+            client.session.post = Mock(return_value=Mock(status_code=200, text=""))
+
+            result = client.run_oauth_logout()
+
+        self.assertFalse(token_file.exists())
+        self.assertEqual(client._user_credentials, {})
+        self.assertTrue(result["oauth_token_file_existed"])
+        self.assertTrue(result["oauth_token_file_deleted"])
+        self.assertTrue(result["revoked"])
+        self.assertEqual(result["revoked_token_type"], "refresh_token")
+        client.session.post.assert_called_once()
+
+    def test_run_oauth_logout_deletes_cached_token_even_when_revocation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client({"GOOGLE_OAUTH_TOKEN_FILE": str(token_file)})
+            client.session.post = Mock(return_value=Mock(status_code=400, text='{"error":"invalid_token"}'))
+
+            result = client.run_oauth_logout()
+
+        self.assertFalse(token_file.exists())
+        self.assertFalse(result["revoked"])
+        self.assertEqual(result["revoked_token_type"], "access_token")
+        self.assertIn("token revocation may not have completed", result["notes"][0])
+
+    def test_run_oauth_logout_reports_missing_token_file(self) -> None:
+        client = self.make_client()
+
+        result = client.run_oauth_logout()
+
+        self.assertFalse(result["oauth_token_file_existed"])
+        self.assertFalse(result["oauth_token_file_deleted"])
+        self.assertFalse(result["revoked"])
+        self.assertIn("No cached OAuth token file was found.", result["notes"])
+
+    def test_run_oauth_logout_warns_when_env_access_token_is_configured(self) -> None:
+        client = self.make_client({"GOOGLE_OAUTH_ACCESS_TOKEN": "ya29.test-token"})
+
+        result = client.run_oauth_logout()
+
+        self.assertTrue(result["oauth_access_token_configured"])
+        self.assertTrue(any("GOOGLE_OAUTH_ACCESS_TOKEN" in note for note in result["notes"]))
+
     def test_resolve_google_file_falls_back_to_sheet_metadata_when_drive_scope_is_missing(self) -> None:
         client = self.make_client()
         client.get_drive_file = Mock(

@@ -50,6 +50,8 @@ $env:GOOGLE_OAUTH_CLIENT_SECRETS_FILE="C:\path\to\oauth-client-secret.json"
 google-workspace-mcp auth
 ```
 
+After the first successful login, the server automatically uses the cached OAuth token for private Docs, Sheets, and Drive calls. You do not need to provide a separate API key for that flow.
+
 This stores a refreshable token by default at:
 
 ```powershell
@@ -67,6 +69,14 @@ If you need to overwrite the cached token with a specific client secret file and
 ```powershell
 google-workspace-mcp auth login --client-secrets C:\path\to\oauth-client-secret.json --token-file C:\path\to\oauth-token.json
 ```
+
+To delete the cached OAuth token later, run:
+
+```powershell
+google-workspace-mcp auth logout
+```
+
+If you separately configured `GOOGLE_OAUTH_ACCESS_TOKEN`, remove that environment variable from your shell or MCP config as well.
 
 ### Recommended: service account
 
@@ -155,6 +165,12 @@ To inspect the current auth setup:
 
 ```powershell
 google-workspace-mcp auth status
+```
+
+To remove the cached OAuth login:
+
+```powershell
+google-workspace-mcp auth logout
 ```
 
 ## Codex MCP Configuration

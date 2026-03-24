@@ -22,9 +22,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     auth_parser.add_argument(
         "action",
         nargs="?",
-        choices=("login", "status"),
+        choices=("login", "status", "logout"),
         default="login",
-        help="Choose `login` to launch the browser flow or `status` to inspect the current setup.",
+        help="Choose `login` to launch the browser flow, `status` to inspect the current setup, or `logout` to delete the cached OAuth token.",
     )
     auth_parser.add_argument(
         "--client-secrets",
@@ -72,6 +72,9 @@ def main(argv: list[str] | None = None) -> None:
             return
 
         try:
+            if args.action == "logout":
+                print(json.dumps(client.run_oauth_logout(), indent=2))
+                return
             result = client.run_oauth_login(
                 scopes=args.scopes or DEFAULT_READONLY_SCOPES,
                 open_browser=not args.no_browser,

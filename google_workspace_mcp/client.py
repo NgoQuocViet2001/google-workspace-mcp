@@ -309,6 +309,25 @@ class GoogleWorkspaceClient:
         self.oauth_token_file.parent.mkdir(parents=True, exist_ok=True)
         self.oauth_token_file.write_text(credentials.to_json(), encoding="utf-8")
 
+    def _revoke_oauth_token(self, token: str) -> tuple[bool, str | None]:
+        try:
+            response = self.session.post(
+                "https://oauth2.googleapis.com/revoke",
+                params={"token": token},
+                headers={"content-type": "application/x-www-form-urlencoded"},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            return False, f"Failed to contact Google's token revocation endpoint: {exc}"
+
+        if response.status_code == 200:
+            return True, None
+
+        detail = response.text.strip()
+        if detail:
+            detail = f": {detail}"
+        return False, f"Google token revocation returned HTTP {response.status_code}{detail}"
+
     def run_oauth_login(
         self,
         scopes: Iterable[str] | None = None,
@@ -331,6 +350,64 @@ class GoogleWorkspaceClient:
             "scopes": requested_scopes,
             "account": getattr(credentials, "account", None),
             "has_refresh_token": bool(credentials.refresh_token),
+        }
+
+    def run_oauth_logout(self) -> dict[str, Any]:
+        cached_payload = self._cached_oauth_token_payload() or {}
+        oauth_access_token_configured = bool(self.oauth_access_token)
+        token_file_existed = self.oauth_token_file.exists()
+
+        token_to_revoke = None
+        revoked_token_type = None
+        for candidate_key, candidate_label in (
+            ("refresh_token", "refresh_token"),
+            ("token", "access_token"),
+        ):
+            candidate_value = str(cached_payload.get(candidate_key) or "").strip()
+            if candidate_value:
+                token_to_revoke = candidate_value
+                revoked_token_type = candidate_label
+                break
+
+        revoked = False
+        revoke_error = None
+        if token_to_revoke:
+            revoked, revoke_error = self._revoke_oauth_token(token_to_revoke)
+
+        token_file_deleted = False
+        if token_file_existed:
+            try:
+                self.oauth_token_file.unlink()
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Failed to delete cached OAuth token file '{self.oauth_token_file}': {exc}"
+                ) from exc
+            token_file_deleted = True
+
+        self._user_credentials.clear()
+
+        notes: list[str] = []
+        if not token_file_existed:
+            notes.append("No cached OAuth token file was found.")
+        if token_to_revoke and not revoked and revoke_error:
+            notes.append(
+                "Cached token file was deleted, but token revocation may not have completed on Google's side: "
+                + revoke_error
+            )
+        if oauth_access_token_configured:
+            notes.append(
+                "GOOGLE_OAUTH_ACCESS_TOKEN is configured separately. Remove it from your shell or MCP env config "
+                "if you want to fully disable bearer-token auth."
+            )
+
+        return {
+            "oauth_token_file": str(self.oauth_token_file),
+            "oauth_token_file_existed": token_file_existed,
+            "oauth_token_file_deleted": token_file_deleted,
+            "revoked": revoked,
+            "revoked_token_type": revoked_token_type,
+            "oauth_access_token_configured": oauth_access_token_configured,
+            "notes": notes,
         }
 
     def _sheet_properties_by_title(
