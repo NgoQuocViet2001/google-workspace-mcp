@@ -16,6 +16,7 @@ from .common import (
     compact_dict,
     detect_google_file_kind,
     extract_file_id,
+    parse_chat_url_context,
     quote_sheet_title,
     safe_filename,
 )
@@ -116,12 +117,20 @@ def get_google_chat_space(space_name_or_url: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_google_chat_message(message_name_or_url: str) -> dict[str, Any]:
+    """Read one Google Chat message from a resource name or Chat thread URL."""
+    client = get_client()
+    return simplify_chat_message(client.get_chat_message(message_name_or_url))
+
+
+@mcp.tool()
 def read_google_chat_messages(
     space_name_or_url: str,
     page_size: int = 100,
     page_token: str | None = None,
     filter_text: str | None = None,
     order_by: str | None = "DESC",
+    show_deleted: bool = False,
 ) -> dict[str, Any]:
     """Read messages in a Google Chat space from a resource name or Chat URL."""
     client = get_client()
@@ -131,10 +140,49 @@ def read_google_chat_messages(
         page_token=page_token,
         filter_text=filter_text,
         order_by=order_by,
+        show_deleted=show_deleted,
     )
     messages = [simplify_chat_message(message) for message in payload.get("messages", [])]
     return {
         "space": space_name_or_url,
+        "message_count": len(messages),
+        "messages": messages,
+        "next_page_token": payload.get("nextPageToken"),
+    }
+
+
+@mcp.tool()
+def read_google_chat_thread(
+    thread_name_or_url: str,
+    page_size: int = 100,
+    page_token: str | None = None,
+    order_by: str | None = "ASC",
+    show_deleted: bool = False,
+) -> dict[str, Any]:
+    """Read one Google Chat thread from a thread URL or resource name, including the linked message and root message."""
+    client = get_client()
+    context = parse_chat_url_context(thread_name_or_url)
+    payload = client.list_chat_thread_messages(
+        thread_name_or_url,
+        page_size=page_size,
+        page_token=page_token,
+        order_by=order_by,
+        show_deleted=show_deleted,
+    )
+    messages = [simplify_chat_message(message) for message in payload.get("messages", [])]
+    root_message = next((message for message in messages if not message.get("thread_reply")), None)
+    if root_message is None and messages:
+        root_message = messages[0]
+    linked_message = (
+        simplify_chat_message(client.get_chat_message(context["message_name"]))
+        if context.get("message_name")
+        else None
+    )
+    return {
+        "space": context.get("space_name"),
+        "thread": context.get("thread_name"),
+        "linked_message": linked_message,
+        "root_message": root_message,
         "message_count": len(messages),
         "messages": messages,
         "next_page_token": payload.get("nextPageToken"),

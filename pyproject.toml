@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-workspace-mcp"
-version = "0.4.1"
+version = "0.4.2"
 description = "MCP server for reading Google Docs and Google Sheets with structured output and image extraction."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -27,10 +27,13 @@ from .common import (
     column_to_a1,
     default_oauth_client_secrets_file,
     default_oauth_token_file,
+    extract_chat_message_name,
     extract_chat_space_name,
+    extract_chat_thread_name,
     extract_file_id,
     normalize_scopes,
     normalize_values_range,
+    parse_chat_url_context,
     parse_sheet_url_context,
     path_from_env,
     quote_range,
@@ -839,12 +842,25 @@ class GoogleWorkspaceClient:
                     error_message = error.get("message", error_message)
             except ValueError:
                 pass
+            if "chat.googleapis.com" in url:
+                error_message = self._augment_google_chat_error_message(response.status_code, error_message)
             raise RuntimeError(
                 f"Google API returned HTTP {response.status_code} for {url}: {error_message}"
             )
         if expect_json:
             return response.json()
         return response.content
+
+    def _augment_google_chat_error_message(self, status_code: int, error_message: str) -> str:
+        lowered = error_message.lower()
+        if status_code == 404 and "google chat app not found" in lowered:
+            return (
+                "Google Chat API is enabled, but this Google Cloud project does not have a Chat app "
+                "configuration yet. In Google Cloud Console, open Google Chat API > Configuration and "
+                "set at least App name, Avatar URL, and Description, then save. Google requires a "
+                "configured Chat app before Chat API reads succeed, even when you authenticate as a user."
+            )
+        return error_message
 
     def get_sheet_metadata(self, spreadsheet_id_or_url: str) -> dict[str, Any]:
         spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
@@ -929,6 +945,15 @@ class GoogleWorkspaceClient:
             allow_api_key=False,
         )
 
+    def get_chat_message(self, message_name_or_url: str) -> dict[str, Any]:
+        message_name = extract_chat_message_name(message_name_or_url)
+        return self._request(
+            "GET",
+            f"https://chat.googleapis.com/v1/{message_name}",
+            scopes=[CHAT_MESSAGES_SCOPE],
+            allow_api_key=False,
+        )
+
     def list_chat_messages(
         self,
         space_name_or_url: str,
@@ -937,6 +962,7 @@ class GoogleWorkspaceClient:
         page_token: str | None = None,
         filter_text: str | None = None,
         order_by: str | None = None,
+        show_deleted: bool = False,
     ) -> dict[str, Any]:
         space_name = extract_chat_space_name(space_name_or_url)
         params = {"pageSize": page_size}
@@ -946,12 +972,35 @@ class GoogleWorkspaceClient:
             params["filter"] = filter_text
         if order_by:
             params["orderBy"] = order_by
+        if show_deleted:
+            params["showDeleted"] = "true"
         return self._request(
             "GET",
             f"https://chat.googleapis.com/v1/{space_name}/messages",
             scopes=[CHAT_MESSAGES_SCOPE],
             allow_api_key=False,
             params=params,
+        )
+
+    def list_chat_thread_messages(
+        self,
+        thread_name_or_url: str,
+        *,
+        page_size: int = 100,
+        page_token: str | None = None,
+        order_by: str | None = "ASC",
+        show_deleted: bool = False,
+    ) -> dict[str, Any]:
+        context = parse_chat_url_context(thread_name_or_url)
+        space_name = context.get("space_name") or extract_chat_space_name(thread_name_or_url)
+        thread_name = context.get("thread_name") or extract_chat_thread_name(thread_name_or_url)
+        return self.list_chat_messages(
+            space_name,
+            page_size=page_size,
+            page_token=page_token,
+            filter_text=f"thread.name = {thread_name}",
+            order_by=order_by,
+            show_deleted=show_deleted,
         )
 
     def list_chat_memberships(

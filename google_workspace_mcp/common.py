@@ -29,7 +29,13 @@ SHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/([a-zA-Z0-
 DRIVE_FILE_RE = re.compile(r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
 DRIVE_OPEN_RE = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
 CHAT_SPACE_RESOURCE_RE = re.compile(r"^spaces/[A-Za-z0-9._=-]+$")
+CHAT_THREAD_RESOURCE_RE = re.compile(r"^spaces/(?P<space>[A-Za-z0-9._=-]+)/threads/(?P<thread>[A-Za-z0-9._=-]+)$")
+CHAT_MESSAGE_RESOURCE_RE = re.compile(
+    r"^spaces/(?P<space>[A-Za-z0-9._=-]+)/messages/(?P<message>[A-Za-z0-9._=-]+)$"
+)
 CHAT_SPACE_EMBEDDED_RE = re.compile(r"spaces/[A-Za-z0-9._=-]+")
+CHAT_THREAD_EMBEDDED_RE = re.compile(r"spaces/[A-Za-z0-9._=-]+/threads/[A-Za-z0-9._=-]+")
+CHAT_MESSAGE_EMBEDDED_RE = re.compile(r"spaces/[A-Za-z0-9._=-]+/messages/[A-Za-z0-9._=-]+")
 CHAT_SPACE_UI_RE = re.compile(r"#chat/(?:space|dm)/([A-Za-z0-9._=-]+)")
 CHAT_ROOM_RE = re.compile(r"/room/([A-Za-z0-9._=-]+)")
 CHAT_ID_RE = re.compile(r"^[A-Za-z0-9._=-]{3,}$")
@@ -151,27 +157,119 @@ def detect_google_file_kind(value: str) -> str | None:
     return None
 
 
-def extract_chat_space_name(value: str) -> str:
+def parse_chat_url_context(value: str) -> dict[str, Any]:
     trimmed = value.strip()
     if not trimmed:
         raise ValueError("Could not extract a Google Chat space name from an empty value.")
 
+    message_match = CHAT_MESSAGE_RESOURCE_RE.fullmatch(trimmed)
+    if message_match:
+        space_id = message_match.group("space")
+        message_id = message_match.group("message")
+        return {
+            "space_id": space_id,
+            "space_name": f"spaces/{space_id}",
+            "thread_id": None,
+            "thread_name": None,
+            "message_id": message_id,
+            "message_name": trimmed,
+        }
+
+    thread_match = CHAT_THREAD_RESOURCE_RE.fullmatch(trimmed)
+    if thread_match:
+        space_id = thread_match.group("space")
+        thread_id = thread_match.group("thread")
+        return {
+            "space_id": space_id,
+            "space_name": f"spaces/{space_id}",
+            "thread_id": thread_id,
+            "thread_name": trimmed,
+            "message_id": None,
+            "message_name": None,
+        }
+
     if CHAT_SPACE_RESOURCE_RE.fullmatch(trimmed):
-        return trimmed
+        space_id = trimmed.split("/", 1)[1]
+        return {
+            "space_id": space_id,
+            "space_name": trimmed,
+            "thread_id": None,
+            "thread_name": None,
+            "message_id": None,
+            "message_name": None,
+        }
+
+    embedded_message_match = CHAT_MESSAGE_EMBEDDED_RE.search(trimmed)
+    if embedded_message_match:
+        message_name = embedded_message_match.group(0)
+        context = parse_chat_url_context(message_name)
+        return context
+
+    embedded_thread_match = CHAT_THREAD_EMBEDDED_RE.search(trimmed)
+    if embedded_thread_match:
+        thread_name = embedded_thread_match.group(0)
+        context = parse_chat_url_context(thread_name)
+        return context
 
     embedded_match = CHAT_SPACE_EMBEDDED_RE.search(trimmed)
     if embedded_match:
-        return embedded_match.group(0)
+        return parse_chat_url_context(embedded_match.group(0))
 
-    for pattern in (CHAT_SPACE_UI_RE, CHAT_ROOM_RE):
+    chat_ui_match = CHAT_SPACE_UI_RE.search(trimmed)
+    if chat_ui_match:
+        return parse_chat_url_context(chat_ui_match.group(1))
+
+    parsed = urlparse(trimmed)
+    path_segments = [segment for segment in parsed.path.split("/") if segment]
+    if "room" in path_segments:
+        room_index = path_segments.index("room")
+        space_id = path_segments[room_index + 1] if len(path_segments) > room_index + 1 else None
+        thread_id = path_segments[room_index + 2] if len(path_segments) > room_index + 2 else None
+        message_id = path_segments[room_index + 3] if len(path_segments) > room_index + 3 else None
+        if space_id:
+            return {
+                "space_id": space_id,
+                "space_name": f"spaces/{space_id}",
+                "thread_id": thread_id,
+                "thread_name": f"spaces/{space_id}/threads/{thread_id}" if thread_id else None,
+                "message_id": message_id,
+                "message_name": f"spaces/{space_id}/messages/{message_id}" if message_id else None,
+            }
+
+    for pattern in (CHAT_ROOM_RE,):
         match = pattern.search(trimmed)
         if match:
-            return f"spaces/{match.group(1)}"
+            return parse_chat_url_context(match.group(1))
 
     if CHAT_ID_RE.fullmatch(trimmed):
-        return f"spaces/{trimmed}"
+        return {
+            "space_id": trimmed,
+            "space_name": f"spaces/{trimmed}",
+            "thread_id": None,
+            "thread_name": None,
+            "message_id": None,
+            "message_name": None,
+        }
 
     raise ValueError(f"Could not extract a Google Chat space name from: {value}")
+
+
+def extract_chat_space_name(value: str) -> str:
+    return parse_chat_url_context(value)["space_name"]
+
+
+def extract_chat_thread_name(value: str) -> str:
+    thread_name = parse_chat_url_context(value).get("thread_name")
+    if thread_name:
+        return thread_name
+    raise ValueError(f"Could not extract a Google Chat thread name from: {value}")
+
+
+def extract_chat_message_name(value: str) -> str:
+    message_name = parse_chat_url_context(value).get("message_name")
+    if message_name:
+        return message_name
+    raise ValueError(f"Could not extract a Google Chat message name from: {value}")
 
 
 def parse_sheet_url_context(value: str) -> dict[str, Any]:

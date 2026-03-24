@@ -328,7 +328,9 @@ If you installed the package directly from GitHub into an environment on your PA
 - `resolve_google_file`
 - `list_google_chat_spaces`
 - `get_google_chat_space`
+- `get_google_chat_message`
 - `read_google_chat_messages`
+- `read_google_chat_thread`
 - `list_google_chat_memberships`
 - `read_sheet_values`
 - `read_sheet_grid`
@@ -408,9 +410,25 @@ read_google_chat_messages(
   50,
   null,
   null,
-  "DESC"
+  "DESC",
+  false
 )
 ```
+
+### Read one Google Chat thread from a thread URL
+
+`read_google_chat_thread()` accepts either a thread resource like `spaces/<space>/threads/<thread>` or a Chat UI URL like `https://chat.google.com/room/<space>/<thread>/<message>`.
+
+```text
+read_google_chat_thread(
+  "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10"
+)
+```
+
+When the URL includes a message ID, the response includes both:
+
+- `linked_message`: the exact message referenced by the link
+- `root_message`: the first message in the thread
 
 ### List members in a Google Chat space
 
@@ -466,6 +484,7 @@ download_google_doc_images(
 - Google Docs image metadata is available directly through the Docs API, so document extraction is strong.
 - Google Sheets does not expose over-grid images as cleanly as cell data, so this server uses XLSX export to recover them.
 - Google Chat reads require OAuth scopes such as `chat.spaces.readonly`, `chat.messages.readonly`, and `chat.memberships.readonly`. If your cached token is older, rerun `python -m google_workspace_mcp auth login`.
+- Google Chat API requests also require a configured Chat app in the same Google Cloud project. In `Google Chat API > Configuration`, fill in at least `App name`, `Avatar URL`, and `Description`, then save.
 - Google Chat private user conversations are most reliable with OAuth user credentials. A plain service account usually needs a properly configured Chat app flow to access Chat resources.
 - In-cell `IMAGE("...")` formulas are detected separately from exported drawing images.
 - Private files shared to your user account should use the OAuth desktop client flow.

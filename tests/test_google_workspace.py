@@ -42,6 +42,26 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             "spaces/AAAAB3NzaC1yc2E",
         )
 
+    def test_parse_chat_url_context_reads_space_thread_and_message_from_room_url(self) -> None:
+        context = workspace.parse_chat_url_context(
+            "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10"
+        )
+
+        self.assertEqual(context["space_name"], "spaces/AAQAyxdRoZo")
+        self.assertEqual(context["thread_name"], "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0")
+        self.assertEqual(context["message_name"], "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0")
+
+    def test_extract_chat_thread_and_message_names_accept_room_url(self) -> None:
+        url = "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10"
+        self.assertEqual(
+            workspace.extract_chat_thread_name(url),
+            "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0",
+        )
+        self.assertEqual(
+            workspace.extract_chat_message_name(url),
+            "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
+        )
+
     def test_get_sheet_values_uses_gid_for_row_only_range(self) -> None:
         client = self.make_client()
         client.get_sheet_metadata = Mock(
@@ -184,6 +204,40 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             },
         )
 
+    def test_get_chat_message_uses_message_name_and_chat_scope(self) -> None:
+        client = self.make_client()
+        client._request = Mock(return_value={"name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0"})
+
+        client.get_chat_message("https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10")
+
+        client._request.assert_called_once_with(
+            "GET",
+            "https://chat.googleapis.com/v1/spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
+            scopes=[workspace.CHAT_MESSAGES_SCOPE],
+            allow_api_key=False,
+        )
+
+    def test_list_chat_thread_messages_filters_by_thread_name(self) -> None:
+        client = self.make_client()
+        client.list_chat_messages = Mock(return_value={"messages": []})
+
+        client.list_chat_thread_messages(
+            "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10",
+            page_size=50,
+            page_token="next-token",
+            order_by="ASC",
+            show_deleted=True,
+        )
+
+        client.list_chat_messages.assert_called_once_with(
+            "spaces/AAQAyxdRoZo",
+            page_size=50,
+            page_token="next-token",
+            filter_text="thread.name = spaces/AAQAyxdRoZo/threads/jVIpmenXnO0",
+            order_by="ASC",
+            show_deleted=True,
+        )
+
     def test_list_google_chat_spaces_tool_returns_simplified_spaces(self) -> None:
         client = self.make_client()
         client.list_chat_spaces = Mock(
@@ -237,6 +291,43 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(result["messages"][0]["text"], "Hello team")
         self.assertEqual(result["messages"][0]["formatted_text"], "*Hello* team")
         self.assertEqual(result["messages"][0]["sender"]["display_name"], "Viet Ngo")
+
+    def test_read_google_chat_thread_tool_returns_linked_and_root_messages(self) -> None:
+        client = self.make_client()
+        client.list_chat_thread_messages = Mock(
+            return_value={
+                "messages": [
+                    {
+                        "name": "spaces/AAQAyxdRoZo/messages/root-msg",
+                        "text": "Root message",
+                        "threadReply": False,
+                    },
+                    {
+                        "name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
+                        "text": "Reply message",
+                        "threadReply": True,
+                    },
+                ]
+            }
+        )
+        client.get_chat_message = Mock(
+            return_value={
+                "name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
+                "text": "Reply message",
+                "threadReply": True,
+            }
+        )
+
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            result = workspace.read_google_chat_thread(
+                "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10"
+            )
+
+        self.assertEqual(result["space"], "spaces/AAQAyxdRoZo")
+        self.assertEqual(result["thread"], "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0")
+        self.assertEqual(result["linked_message"]["name"], "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0")
+        self.assertEqual(result["root_message"]["name"], "spaces/AAQAyxdRoZo/messages/root-msg")
+        self.assertEqual(result["message_count"], 2)
 
     def test_list_google_chat_memberships_tool_returns_simplified_memberships(self) -> None:
         client = self.make_client()
@@ -385,6 +476,27 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(params, {})
         self.assertEqual(headers["Authorization"], "Bearer service-account-token")
         self.assertEqual(fake_base.requested_scopes, (workspace.SHEETS_SCOPE,))
+
+    def test_chat_request_error_explains_missing_chat_app_configuration(self) -> None:
+        client = self.make_client()
+        failed_response = Mock()
+        failed_response.ok = False
+        failed_response.status_code = 404
+        failed_response.text = '{"error":{"message":"Google Chat app not found. To create a Chat app, you must turn on the Chat API and configure the app in the Google Cloud console."}}'
+        failed_response.headers = {}
+        failed_response.json.return_value = {
+            "error": {
+                "message": "Google Chat app not found. To create a Chat app, you must turn on the Chat API and configure the app in the Google Cloud console."
+            }
+        }
+        client.session.request = Mock(return_value=failed_response)
+
+        with patch.object(client, "_auth_headers", return_value=({"Authorization": "Bearer test"}, {})):
+            with self.assertRaises(RuntimeError) as caught:
+                client.list_chat_spaces()
+
+        self.assertIn("does not have a Chat app configuration yet", str(caught.exception))
+        self.assertIn("Google Chat API > Configuration", str(caught.exception))
 
     def test_oauth_flow_uses_detected_google_download_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
