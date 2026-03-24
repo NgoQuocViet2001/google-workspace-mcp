@@ -48,13 +48,15 @@ google-workspace-mcp
 ### Login OAuth quickly
 
 1. In Google Cloud, create an OAuth client ID with application type `Desktop app`.
-2. Run:
+2. If the published package already includes a bundled OAuth desktop client, just run:
 
 ```powershell
 python -m google_workspace_mcp auth login
 ```
 
-3. If no local OAuth client config exists yet, the CLI prompts once for:
+That opens the browser OAuth flow directly.
+
+3. If the package does not include a bundled OAuth client and no local OAuth client config exists yet, the CLI prompts once for:
    - `Client ID`
    - `Client Secret`
 
@@ -95,6 +97,14 @@ Use `python -m google_workspace_mcp ...` everywhere below. If `google-workspace-
 ### Recommended for private files shared to your Google account: OAuth desktop client
 
 Use a Google OAuth client ID for Desktop App if the files are private but shared to your personal Google account.
+
+If you want end users to be able to run `python -m google_workspace_mcp auth login` and jump straight into the browser OAuth flow with no extra setup, publish the package with a bundled desktop-app client at:
+
+```text
+google_workspace_mcp/oauth-default-client.json
+```
+
+If no bundled client is shipped, the CLI falls back to prompting once for `Client ID` and `Client Secret`, or it can read them from a local JSON file.
 
 1. Enable:
    - Google Sheets API

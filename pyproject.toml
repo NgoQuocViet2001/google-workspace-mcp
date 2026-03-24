@@ -21,5 +21,8 @@ google-workspace-mcp = "google_workspace_mcp.cli:main"
 [tool.setuptools]
 py-modules = ["mcp_google_workspace"]
 
+[tool.setuptools.package-data]
+google_workspace_mcp = ["*.json"]
+
 [tool.setuptools.packages.find]
 include = ["google_workspace_mcp*"]

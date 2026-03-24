@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.resources
 import json
 import os
 import time
@@ -135,6 +136,25 @@ class GoogleWorkspaceClient:
             preview += ", ..."
         return preview
 
+    def _bundled_oauth_client_config_json(self) -> dict[str, Any] | None:
+        try:
+            resource = importlib.resources.files("google_workspace_mcp").joinpath("oauth-default-client.json")
+        except (ModuleNotFoundError, FileNotFoundError):
+            return None
+        try:
+            if not resource.is_file():
+                return None
+            payload = json.loads(resource.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        for key in ("installed", "web"):
+            section = payload.get(key)
+            if isinstance(section, dict) and section.get("client_id") and section.get("client_secret"):
+                return payload
+        return None
+
     def _oauth_client_secrets_fallback_candidates(self, configured_path: Path) -> list[Path]:
         candidates: list[Path] = []
         seen: set[Path] = set()
@@ -262,13 +282,19 @@ class GoogleWorkspaceClient:
 
     def auth_summary(self) -> dict[str, Any]:
         resolved_oauth_client_file = self._resolved_oauth_client_secrets_file()
+        bundled_oauth_client_config = self._bundled_oauth_client_config_json()
         oauth_client_issue = self._oauth_client_secrets_path_issue()
         oauth_client_ready = bool(
-            resolved_oauth_client_file or self.oauth_client_config_json or self.oauth_token_file.exists()
+            resolved_oauth_client_file
+            or bundled_oauth_client_config
+            or self.oauth_client_config_json
+            or self.oauth_token_file.exists()
         )
         oauth_client_source = None
         if resolved_oauth_client_file:
             oauth_client_source = str(resolved_oauth_client_file)
+        elif bundled_oauth_client_config:
+            oauth_client_source = "google_workspace_mcp/oauth-default-client.json"
         elif self.oauth_client_secrets_file:
             oauth_client_source = str(self._configured_oauth_client_secrets_file())
         elif self.oauth_client_config_json:
@@ -347,7 +373,11 @@ class GoogleWorkspaceClient:
         )
 
     def _oauth_client_is_configured(self) -> bool:
-        return bool(self._resolved_oauth_client_secrets_file() or self.oauth_client_config_json)
+        return bool(
+            self._resolved_oauth_client_secrets_file()
+            or self._bundled_oauth_client_config_json()
+            or self.oauth_client_config_json
+        )
 
     def _oauth_flow(self, scopes: Iterable[str]) -> InstalledAppFlow:
         oauth_client_secrets_file = self._resolved_oauth_client_secrets_file(raise_on_error=True)
@@ -364,6 +394,17 @@ class GoogleWorkspaceClient:
             except ValueError as exc:
                 raise RuntimeError(
                     "OAuth client secrets file is not a valid Google OAuth client configuration JSON."
+                ) from exc
+        bundled_oauth_client_config = self._bundled_oauth_client_config_json()
+        if bundled_oauth_client_config:
+            try:
+                return InstalledAppFlow.from_client_config(
+                    bundled_oauth_client_config,
+                    list(scopes),
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "The bundled OAuth client configuration is not a valid Google OAuth client configuration."
                 ) from exc
         if self.oauth_client_config_json:
             try:
@@ -438,6 +479,19 @@ class GoogleWorkspaceClient:
         self.oauth_client_config_json = None
         return target_path
 
+    def _persist_oauth_client_config_payload(self, payload: dict[str, Any]) -> tuple[Path | None, str | None]:
+        target_path = default_oauth_client_secrets_file().expanduser()
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError as exc:
+            return None, (
+                f"Login succeeded, but the OAuth client configuration could not be saved to '{target_path}': {exc}"
+            )
+        self.oauth_client_secrets_file = target_path
+        self.oauth_client_config_json = None
+        return target_path, None
+
     def _revoke_oauth_token(self, token: str) -> tuple[bool, str | None]:
         try:
             response = self.session.post(
@@ -466,6 +520,7 @@ class GoogleWorkspaceClient:
     ) -> dict[str, Any]:
         requested_scopes = list(scopes or DEFAULT_READONLY_SCOPES)
         resolved_oauth_client_secrets_file = self._resolved_oauth_client_secrets_file()
+        bundled_oauth_client_config = self._bundled_oauth_client_config_json()
         flow = self._oauth_flow(requested_scopes)
         credentials = flow.run_local_server(
             port=self.oauth_local_server_port if port is None else port,
@@ -482,6 +537,11 @@ class GoogleWorkspaceClient:
                 resolved_oauth_client_secrets_file
             )
             oauth_client_secrets_file = str(persisted_path or resolved_oauth_client_secrets_file)
+            if persist_error:
+                notes.append(persist_error)
+        elif bundled_oauth_client_config:
+            persisted_path, persist_error = self._persist_oauth_client_config_payload(bundled_oauth_client_config)
+            oauth_client_secrets_file = str(persisted_path) if persisted_path else None
             if persist_error:
                 notes.append(persist_error)
         return {
