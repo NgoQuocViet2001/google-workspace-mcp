@@ -37,6 +37,7 @@ Use a Google OAuth client ID for Desktop App if the files are private but shared
    - Google Drive API
 2. Create an OAuth client ID with application type `Desktop app`.
 3. Download the client secret JSON.
+   The downloaded filename is often something like `client_secret_<id>.apps.googleusercontent.com.json`.
 4. Set:
 
 ```powershell

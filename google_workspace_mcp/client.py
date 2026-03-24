@@ -61,6 +61,96 @@ class GoogleWorkspaceClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "google-workspace-mcp/1.0"})
 
+    def _configured_oauth_client_secrets_file(self) -> Path | None:
+        if not self.oauth_client_secrets_file:
+            return None
+        return self.oauth_client_secrets_file.expanduser()
+
+    def _oauth_client_secrets_fallback_candidates(self, configured_path: Path) -> list[Path]:
+        candidates: list[Path] = []
+        seen: set[Path] = set()
+
+        def add(path: Path) -> None:
+            normalized = path.expanduser()
+            if normalized == configured_path or normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        file_name = configured_path.name
+        if "oauth-client-secret" in file_name:
+            add(configured_path.with_name(file_name.replace("oauth-client-secret", "oauth-client-secrets", 1)))
+        if "oauth-client-secrets" in file_name:
+            add(configured_path.with_name(file_name.replace("oauth-client-secrets", "oauth-client-secret", 1)))
+        if "client-secret" in file_name:
+            add(configured_path.with_name(file_name.replace("client-secret", "client-secrets", 1)))
+        if "client-secrets" in file_name:
+            add(configured_path.with_name(file_name.replace("client-secrets", "client-secret", 1)))
+
+        for candidate_name in (
+            "oauth-client-secret.json",
+            "oauth-client-secrets.json",
+            "client-secret.json",
+            "client-secrets.json",
+        ):
+            add(configured_path.with_name(candidate_name))
+
+        parent = configured_path.parent
+        if not parent.is_dir():
+            return candidates
+
+        for pattern in (
+            "client_secret*.json",
+            "oauth-client-secret*.json",
+            "oauth-client-secrets*.json",
+            "*apps.googleusercontent.com*.json",
+        ):
+            for match in sorted(parent.glob(pattern)):
+                add(match)
+        return candidates
+
+    def _oauth_client_secrets_path_issue(self) -> str | None:
+        configured_path = self._configured_oauth_client_secrets_file()
+        if configured_path is None or configured_path.is_file():
+            return None
+
+        fallback_matches = [
+            path for path in self._oauth_client_secrets_fallback_candidates(configured_path) if path.is_file()
+        ]
+        if len(fallback_matches) == 1:
+            return None
+        if len(fallback_matches) > 1:
+            preview = ", ".join(str(path) for path in fallback_matches[:3])
+            if len(fallback_matches) > 3:
+                preview += ", ..."
+            return (
+                f"OAuth client secrets file was not found at '{configured_path}', and multiple nearby JSON files "
+                f"look like possible client secrets: {preview}. Pass --client-secrets with the exact file path."
+            )
+        return (
+            f"OAuth client secrets file was not found at '{configured_path}'. Pass the exact path to the desktop-app "
+            "client JSON downloaded from Google Cloud (often named "
+            "'client_secret_<id>.apps.googleusercontent.com.json')."
+        )
+
+    def _resolved_oauth_client_secrets_file(self, *, raise_on_error: bool = False) -> Path | None:
+        configured_path = self._configured_oauth_client_secrets_file()
+        if configured_path is None:
+            return None
+        if configured_path.is_file():
+            return configured_path
+
+        fallback_matches = [
+            path for path in self._oauth_client_secrets_fallback_candidates(configured_path) if path.is_file()
+        ]
+        if len(fallback_matches) == 1:
+            return fallback_matches[0]
+        if raise_on_error:
+            issue = self._oauth_client_secrets_path_issue()
+            if issue:
+                raise RuntimeError(issue)
+        return None
+
     def _cached_oauth_token_payload(self) -> dict[str, Any] | None:
         if not self.oauth_token_file.exists():
             return None
@@ -92,10 +182,16 @@ class GoogleWorkspaceClient:
         return [scope for scope in sorted(set(required_scopes)) if scope not in cached_scopes]
 
     def auth_summary(self) -> dict[str, Any]:
-        oauth_client_ready = bool(self.oauth_client_secrets_file or self.oauth_client_config_json)
+        resolved_oauth_client_file = self._resolved_oauth_client_secrets_file()
+        oauth_client_issue = self._oauth_client_secrets_path_issue()
+        oauth_client_ready = bool(
+            resolved_oauth_client_file or self.oauth_client_config_json or self.oauth_token_file.exists()
+        )
         oauth_client_source = None
-        if self.oauth_client_secrets_file:
-            oauth_client_source = str(self.oauth_client_secrets_file)
+        if resolved_oauth_client_file:
+            oauth_client_source = str(resolved_oauth_client_file)
+        elif self.oauth_client_secrets_file:
+            oauth_client_source = str(self._configured_oauth_client_secrets_file())
         elif self.oauth_client_config_json:
             oauth_client_source = "GOOGLE_OAUTH_CLIENT_CONFIG_JSON"
         service_account_ready = bool(self.service_account_file or self.service_account_json)
@@ -110,6 +206,7 @@ class GoogleWorkspaceClient:
             "oauth_access_token_configured": bool(self.oauth_access_token),
             "oauth_client_configured": oauth_client_ready,
             "oauth_client_source": oauth_client_source,
+            "oauth_client_path_issue": oauth_client_issue,
             "oauth_token_file": str(self.oauth_token_file),
             "oauth_token_cached": self.oauth_token_file.exists(),
             "oauth_token_format": self._cached_oauth_token_format(),
@@ -130,7 +227,9 @@ class GoogleWorkspaceClient:
     def _recommended_mode(self) -> str:
         if self.oauth_access_token:
             return "oauth_access_token"
-        if self.oauth_client_secrets_file or self.oauth_client_config_json:
+        if self.oauth_token_file.exists():
+            return "oauth_client"
+        if self._oauth_client_is_configured():
             return "oauth_client"
         if self.service_account_file or self.service_account_json:
             return "service_account"
@@ -141,9 +240,9 @@ class GoogleWorkspaceClient:
     def _active_auth_mode(self) -> str:
         if self.oauth_access_token:
             return "oauth_access_token"
+        if self.oauth_token_file.exists():
+            return "oauth_client_cached_token"
         if self._oauth_client_is_configured():
-            if self.oauth_token_file.exists():
-                return "oauth_client_cached_token"
             return "oauth_client_not_authorized"
         if self.service_account_file or self.service_account_json:
             return "service_account"
@@ -169,19 +268,38 @@ class GoogleWorkspaceClient:
         )
 
     def _oauth_client_is_configured(self) -> bool:
-        return bool(self.oauth_client_secrets_file or self.oauth_client_config_json)
+        return bool(self._resolved_oauth_client_secrets_file() or self.oauth_client_config_json)
 
     def _oauth_flow(self, scopes: Iterable[str]) -> InstalledAppFlow:
-        if self.oauth_client_secrets_file:
-            return InstalledAppFlow.from_client_secrets_file(
-                str(self.oauth_client_secrets_file),
-                list(scopes),
-            )
+        oauth_client_secrets_file = self._resolved_oauth_client_secrets_file(raise_on_error=True)
+        if oauth_client_secrets_file:
+            try:
+                return InstalledAppFlow.from_client_secrets_file(
+                    str(oauth_client_secrets_file),
+                    list(scopes),
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Unable to read OAuth client secrets file at '{oauth_client_secrets_file}': {exc}"
+                ) from exc
+            except ValueError as exc:
+                raise RuntimeError(
+                    "OAuth client secrets file is not a valid Google OAuth client configuration JSON."
+                ) from exc
         if self.oauth_client_config_json:
-            return InstalledAppFlow.from_client_config(
-                json.loads(self.oauth_client_config_json),
-                list(scopes),
-            )
+            try:
+                client_config = json.loads(self.oauth_client_config_json)
+            except ValueError as exc:
+                raise RuntimeError("GOOGLE_OAUTH_CLIENT_CONFIG_JSON is not valid JSON.") from exc
+            try:
+                return InstalledAppFlow.from_client_config(
+                    client_config,
+                    list(scopes),
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "GOOGLE_OAUTH_CLIENT_CONFIG_JSON is not a valid Google OAuth client configuration."
+                ) from exc
         raise RuntimeError(
             "No OAuth client credentials are configured. Set GOOGLE_OAUTH_CLIENT_SECRETS_FILE "
             "or GOOGLE_OAUTH_CLIENT_CONFIG_JSON."
@@ -299,16 +417,10 @@ class GoogleWorkspaceClient:
         if credentials is not None and credentials.valid and credentials.token:
             return credentials
 
-        if not self._oauth_client_is_configured():
-            raise RuntimeError(
-                "No OAuth client configuration found. Set GOOGLE_OAUTH_CLIENT_SECRETS_FILE or "
-                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON, then run `google-workspace-mcp auth`."
-            )
-
         if not self.oauth_token_file.exists():
             raise RuntimeError(
-                "OAuth client credentials are configured, but no cached user token was found. "
-                "Run `google-workspace-mcp auth` to complete the browser login flow."
+                "No cached OAuth user token was found. Set GOOGLE_OAUTH_CLIENT_SECRETS_FILE or "
+                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON, then run `google-workspace-mcp auth` to complete the browser login flow."
             )
 
         missing_scopes = self._missing_cached_oauth_scopes(scope_list)
@@ -352,7 +464,7 @@ class GoogleWorkspaceClient:
             headers["Authorization"] = f"Bearer {self.oauth_access_token}"
             return headers, params
 
-        if scope_list and self._oauth_client_is_configured():
+        if scope_list and (self.oauth_token_file.exists() or self._oauth_client_is_configured()):
             try:
                 credentials = self._user_oauth_credentials(scope_list)
             except RuntimeError as exc:

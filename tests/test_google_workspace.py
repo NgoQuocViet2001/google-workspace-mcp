@@ -198,6 +198,18 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertIn(workspace.DRIVE_SCOPE, summary["oauth_token_missing_scopes"])
         self.assertEqual(summary["active_auth_mode"], "oauth_client_cached_token")
 
+    def test_auth_summary_marks_missing_oauth_client_secret_file_as_not_configured(self) -> None:
+        client = self.make_client(
+            {
+                "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/Users/TestUser/.google-workspace-mcp/oauth-client-secret.json",
+            }
+        )
+        summary = client.auth_summary()
+
+        self.assertFalse(summary["oauth_client_configured"])
+        self.assertEqual(summary["recommended_mode"], "missing_credentials")
+        self.assertIn("not found", summary["oauth_client_path_issue"])
+
     def test_auth_headers_falls_back_to_api_key_when_cached_oauth_token_lacks_scope(self) -> None:
         client = self.make_client({"GOOGLE_API_KEY": "public-key"})
 
@@ -245,6 +257,42 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(params, {})
         self.assertEqual(headers["Authorization"], "Bearer service-account-token")
         self.assertEqual(fake_base.requested_scopes, (workspace.SHEETS_SCOPE,))
+
+    def test_oauth_flow_uses_detected_google_download_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            downloaded_file = temp_path / "client_secret_123.apps.googleusercontent.com.json"
+            downloaded_file.write_text("{}", encoding="utf-8")
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(temp_path / "oauth-client-secret.json"),
+                }
+            )
+
+            with patch(
+                "google_workspace_mcp.client.InstalledAppFlow.from_client_secrets_file",
+                return_value=Mock(name="flow"),
+            ) as flow_factory:
+                flow = client._oauth_flow([workspace.SHEETS_SCOPE])
+
+        self.assertEqual(flow, flow_factory.return_value)
+        flow_factory.assert_called_once_with(
+            str(downloaded_file),
+            [workspace.SHEETS_SCOPE],
+        )
+
+    def test_oauth_flow_raises_helpful_error_when_client_secret_file_is_missing(self) -> None:
+        client = self.make_client(
+            {
+                "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/Users/TestUser/.google-workspace-mcp/oauth-client-secret.json",
+            }
+        )
+
+        with self.assertRaises(RuntimeError) as caught:
+            client._oauth_flow([workspace.SHEETS_SCOPE])
+
+        self.assertIn("not found", str(caught.exception))
+        self.assertIn("apps.googleusercontent.com", str(caught.exception))
 
     def test_resolve_google_file_falls_back_to_sheet_metadata_when_drive_scope_is_missing(self) -> None:
         client = self.make_client()
