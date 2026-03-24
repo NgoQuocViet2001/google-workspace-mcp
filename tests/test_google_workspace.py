@@ -28,6 +28,20 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(context["gid"], 1544244212)
         self.assertEqual(context["range_a1"], "38:38")
 
+    def test_extract_chat_space_name_accepts_chat_urls_and_ids(self) -> None:
+        self.assertEqual(
+            workspace.extract_chat_space_name("https://mail.google.com/chat/u/0/#chat/space/AAAAB3NzaC1yc2E"),
+            "spaces/AAAAB3NzaC1yc2E",
+        )
+        self.assertEqual(
+            workspace.extract_chat_space_name("AAAAB3NzaC1yc2E"),
+            "spaces/AAAAB3NzaC1yc2E",
+        )
+        self.assertEqual(
+            workspace.extract_chat_space_name("spaces/AAAAB3NzaC1yc2E/messages/123"),
+            "spaces/AAAAB3NzaC1yc2E",
+        )
+
     def test_get_sheet_values_uses_gid_for_row_only_range(self) -> None:
         client = self.make_client()
         client.get_sheet_metadata = Mock(
@@ -144,6 +158,118 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(result["match_count"], 0)
         self.assertEqual(client.get_sheet_grid.call_count, 1)
         self.assertEqual(client.get_sheet_grid.call_args.args[1], workspace.quote_sheet_title("Feedback"))
+
+    def test_list_chat_messages_uses_space_name_and_chat_scope(self) -> None:
+        client = self.make_client()
+        client._request = Mock(return_value={"messages": []})
+
+        client.list_chat_messages(
+            "https://mail.google.com/chat/u/0/#chat/space/AAAAB3NzaC1yc2E",
+            page_size=25,
+            page_token="next-token",
+            filter_text='thread.name = "spaces/AAAAB3NzaC1yc2E/threads/123"',
+            order_by="ASC",
+        )
+
+        client._request.assert_called_once_with(
+            "GET",
+            "https://chat.googleapis.com/v1/spaces/AAAAB3NzaC1yc2E/messages",
+            scopes=[workspace.CHAT_MESSAGES_SCOPE],
+            allow_api_key=False,
+            params={
+                "pageSize": 25,
+                "pageToken": "next-token",
+                "filter": 'thread.name = "spaces/AAAAB3NzaC1yc2E/threads/123"',
+                "orderBy": "ASC",
+            },
+        )
+
+    def test_list_google_chat_spaces_tool_returns_simplified_spaces(self) -> None:
+        client = self.make_client()
+        client.list_chat_spaces = Mock(
+            return_value={
+                "spaces": [
+                    {
+                        "name": "spaces/AAAAB3NzaC1yc2E",
+                        "displayName": "Product Launch",
+                        "spaceType": "SPACE",
+                        "spaceThreadingState": "THREADED_MESSAGES",
+                    }
+                ],
+                "nextPageToken": "page-2",
+            }
+        )
+
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            result = workspace.list_google_chat_spaces(page_size=10)
+
+        client.list_chat_spaces.assert_called_once_with(page_size=10, page_token=None, filter_text=None)
+        self.assertEqual(result["space_count"], 1)
+        self.assertEqual(result["spaces"][0]["display_name"], "Product Launch")
+        self.assertEqual(result["spaces"][0]["threading_state"], "THREADED_MESSAGES")
+        self.assertEqual(result["next_page_token"], "page-2")
+
+    def test_read_google_chat_messages_tool_returns_simplified_messages(self) -> None:
+        client = self.make_client()
+        client.list_chat_messages = Mock(
+            return_value={
+                "messages": [
+                    {
+                        "name": "spaces/AAAAB3NzaC1yc2E/messages/msg-1",
+                        "text": "Hello team",
+                        "formattedText": "*Hello* team",
+                        "createTime": "2026-03-25T10:00:00Z",
+                        "threadReply": False,
+                        "sender": {
+                            "name": "users/123",
+                            "displayName": "Viet Ngo",
+                            "type": "HUMAN",
+                        },
+                    }
+                ]
+            }
+        )
+
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            result = workspace.read_google_chat_messages("spaces/AAAAB3NzaC1yc2E")
+
+        self.assertEqual(result["message_count"], 1)
+        self.assertEqual(result["messages"][0]["text"], "Hello team")
+        self.assertEqual(result["messages"][0]["formatted_text"], "*Hello* team")
+        self.assertEqual(result["messages"][0]["sender"]["display_name"], "Viet Ngo")
+
+    def test_list_google_chat_memberships_tool_returns_simplified_memberships(self) -> None:
+        client = self.make_client()
+        client.list_chat_memberships = Mock(
+            return_value={
+                "memberships": [
+                    {
+                        "name": "spaces/AAAAB3NzaC1yc2E/members/123",
+                        "state": "JOINED",
+                        "role": "ROLE_MEMBER",
+                        "member": {
+                            "name": "users/123",
+                            "displayName": "Viet Ngo",
+                            "type": "HUMAN",
+                        },
+                    }
+                ]
+            }
+        )
+
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            result = workspace.list_google_chat_memberships("spaces/AAAAB3NzaC1yc2E", show_invited=True)
+
+        client.list_chat_memberships.assert_called_once_with(
+            "spaces/AAAAB3NzaC1yc2E",
+            page_size=100,
+            page_token=None,
+            filter_text=None,
+            show_groups=False,
+            show_invited=True,
+        )
+        self.assertEqual(result["membership_count"], 1)
+        self.assertEqual(result["memberships"][0]["member"]["display_name"], "Viet Ngo")
 
     def test_user_oauth_credentials_fails_fast_when_token_scopes_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -390,6 +516,10 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
 
         with patch.object(
             client,
+            "_resolved_oauth_client_secrets_file",
+            return_value=None,
+        ), patch.object(
+            client,
             "_bundled_oauth_client_config_json",
             return_value=bundled_config,
         ), patch(
@@ -400,10 +530,11 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             summary = client.auth_summary()
 
         self.assertEqual(flow, flow_factory.return_value)
-        flow_factory.assert_called_once_with(
-            bundled_config,
-            [workspace.SHEETS_SCOPE],
-        )
+        flow_factory.assert_called_once()
+        call_args, call_kwargs = flow_factory.call_args
+        self.assertEqual(call_args[0], bundled_config)
+        requested_scopes = call_args[1] if len(call_args) > 1 else call_kwargs.get("scopes")
+        self.assertEqual(requested_scopes, [workspace.SHEETS_SCOPE])
         self.assertTrue(summary["oauth_client_configured"])
         self.assertEqual(summary["oauth_client_source"], "google_workspace_mcp/oauth-default-client.json")
 

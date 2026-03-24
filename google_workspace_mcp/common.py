@@ -11,13 +11,28 @@ from urllib.parse import parse_qsl, quote, urlparse
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
+CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
+CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-DEFAULT_READONLY_SCOPES = [DOCS_SCOPE, DRIVE_SCOPE, SHEETS_SCOPE]
+DEFAULT_READONLY_SCOPES = [
+    DOCS_SCOPE,
+    DRIVE_SCOPE,
+    SHEETS_SCOPE,
+    CHAT_SPACES_SCOPE,
+    CHAT_MESSAGES_SCOPE,
+    CHAT_MEMBERSHIPS_SCOPE,
+]
 
 DOC_URL_RE = re.compile(r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")
 SHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)")
 DRIVE_FILE_RE = re.compile(r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
 DRIVE_OPEN_RE = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
+CHAT_SPACE_RESOURCE_RE = re.compile(r"^spaces/[A-Za-z0-9._=-]+$")
+CHAT_SPACE_EMBEDDED_RE = re.compile(r"spaces/[A-Za-z0-9._=-]+")
+CHAT_SPACE_UI_RE = re.compile(r"#chat/(?:space|dm)/([A-Za-z0-9._=-]+)")
+CHAT_ROOM_RE = re.compile(r"/room/([A-Za-z0-9._=-]+)")
+CHAT_ID_RE = re.compile(r"^[A-Za-z0-9._=-]{3,}$")
 IMAGE_FORMULA_RE = re.compile(r'(?is)^=IMAGE\(\s*"([^"]+)"')
 ID_RE = re.compile(r"^[a-zA-Z0-9_-]{15,}$")
 ROW_ONLY_RANGE_RE = re.compile(r"^\d+(?::\d+)?$")
@@ -134,6 +149,29 @@ def detect_google_file_kind(value: str) -> str | None:
     if DRIVE_FILE_RE.search(trimmed) or DRIVE_OPEN_RE.search(trimmed):
         return "drive"
     return None
+
+
+def extract_chat_space_name(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError("Could not extract a Google Chat space name from an empty value.")
+
+    if CHAT_SPACE_RESOURCE_RE.fullmatch(trimmed):
+        return trimmed
+
+    embedded_match = CHAT_SPACE_EMBEDDED_RE.search(trimmed)
+    if embedded_match:
+        return embedded_match.group(0)
+
+    for pattern in (CHAT_SPACE_UI_RE, CHAT_ROOM_RE):
+        match = pattern.search(trimmed)
+        if match:
+            return f"spaces/{match.group(1)}"
+
+    if CHAT_ID_RE.fullmatch(trimmed):
+        return f"spaces/{trimmed}"
+
+    raise ValueError(f"Could not extract a Google Chat space name from: {value}")
 
 
 def parse_sheet_url_context(value: str) -> dict[str, Any]:

@@ -16,6 +16,9 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .common import (
+    CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_MESSAGES_SCOPE,
+    CHAT_SPACES_SCOPE,
     DEFAULT_READONLY_SCOPES,
     DOCS_SCOPE,
     DRIVE_SCOPE,
@@ -24,6 +27,7 @@ from .common import (
     column_to_a1,
     default_oauth_client_secrets_file,
     default_oauth_token_file,
+    extract_chat_space_name,
     extract_file_id,
     normalize_scopes,
     normalize_values_range,
@@ -324,7 +328,7 @@ class GoogleWorkspaceClient:
             "notes": [
                 "Public Sheets can be read with GOOGLE_API_KEY.",
                 "OAuth desktop client credentials can read private files shared to your Google account.",
-                "Docs API and Drive export are most reliable with a service account or OAuth access token.",
+                "Docs, Drive, and Google Chat reads are most reliable with OAuth user credentials or an OAuth access token.",
                 "A service account must be granted access to private files or shared drives.",
             ],
         }
@@ -782,7 +786,8 @@ class GoogleWorkspaceClient:
         raise RuntimeError(
             "No valid Google credentials are configured. "
             f"This operation {mode}. Use an OAuth desktop client, service account, or OAuth token "
-            "for private Docs/Drive, or GOOGLE_API_KEY for public Sheets."
+            "for private Google Workspace data such as Docs, Drive, Sheets, and Chat, or GOOGLE_API_KEY "
+            "for public Sheets."
         )
 
     def _retry_delay_seconds(self, response: requests.Response, attempt_index_zero_based: int) -> float:
@@ -893,6 +898,88 @@ class GoogleWorkspaceClient:
             scopes=[DOCS_SCOPE],
             allow_api_key=False,
             params={"includeTabsContent": "true"},
+        )
+
+    def list_chat_spaces(
+        self,
+        *,
+        page_size: int = 100,
+        page_token: str | None = None,
+        filter_text: str | None = None,
+    ) -> dict[str, Any]:
+        params = {"pageSize": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        if filter_text:
+            params["filter"] = filter_text
+        return self._request(
+            "GET",
+            "https://chat.googleapis.com/v1/spaces",
+            scopes=[CHAT_SPACES_SCOPE],
+            allow_api_key=False,
+            params=params,
+        )
+
+    def get_chat_space(self, space_name_or_url: str) -> dict[str, Any]:
+        space_name = extract_chat_space_name(space_name_or_url)
+        return self._request(
+            "GET",
+            f"https://chat.googleapis.com/v1/{space_name}",
+            scopes=[CHAT_SPACES_SCOPE],
+            allow_api_key=False,
+        )
+
+    def list_chat_messages(
+        self,
+        space_name_or_url: str,
+        *,
+        page_size: int = 100,
+        page_token: str | None = None,
+        filter_text: str | None = None,
+        order_by: str | None = None,
+    ) -> dict[str, Any]:
+        space_name = extract_chat_space_name(space_name_or_url)
+        params = {"pageSize": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        if filter_text:
+            params["filter"] = filter_text
+        if order_by:
+            params["orderBy"] = order_by
+        return self._request(
+            "GET",
+            f"https://chat.googleapis.com/v1/{space_name}/messages",
+            scopes=[CHAT_MESSAGES_SCOPE],
+            allow_api_key=False,
+            params=params,
+        )
+
+    def list_chat_memberships(
+        self,
+        space_name_or_url: str,
+        *,
+        page_size: int = 100,
+        page_token: str | None = None,
+        filter_text: str | None = None,
+        show_groups: bool = False,
+        show_invited: bool = False,
+    ) -> dict[str, Any]:
+        space_name = extract_chat_space_name(space_name_or_url)
+        params = {"pageSize": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        if filter_text:
+            params["filter"] = filter_text
+        if show_groups:
+            params["showGroups"] = "true"
+        if show_invited:
+            params["showInvited"] = "true"
+        return self._request(
+            "GET",
+            f"https://chat.googleapis.com/v1/{space_name}/members",
+            scopes=[CHAT_MEMBERSHIPS_SCOPE],
+            allow_api_key=False,
+            params=params,
         )
 
     def get_sheet_values(

@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .chat import (
+    simplify_chat_membership,
+    simplify_chat_message,
+    simplify_chat_space,
+)
 from .client import get_client
 from .common import (
     SHEET_FORMULA_FIELDS,
@@ -80,6 +85,88 @@ def resolve_google_file(file_id_or_url: str) -> dict[str, Any]:
         raise RuntimeError(
             "Cached OAuth token is missing drive.readonly. Re-run `google-workspace-mcp auth` to refresh the token."
         ) from exc
+
+
+@mcp.tool()
+def list_google_chat_spaces(
+    page_size: int = 100,
+    page_token: str | None = None,
+    filter_text: str | None = None,
+) -> dict[str, Any]:
+    """List Google Chat spaces the authenticated user can access."""
+    client = get_client()
+    payload = client.list_chat_spaces(
+        page_size=page_size,
+        page_token=page_token,
+        filter_text=filter_text,
+    )
+    spaces = [simplify_chat_space(space) for space in payload.get("spaces", [])]
+    return {
+        "space_count": len(spaces),
+        "spaces": spaces,
+        "next_page_token": payload.get("nextPageToken"),
+    }
+
+
+@mcp.tool()
+def get_google_chat_space(space_name_or_url: str) -> dict[str, Any]:
+    """Read metadata for one Google Chat space from a resource name or Chat URL."""
+    client = get_client()
+    return simplify_chat_space(client.get_chat_space(space_name_or_url))
+
+
+@mcp.tool()
+def read_google_chat_messages(
+    space_name_or_url: str,
+    page_size: int = 100,
+    page_token: str | None = None,
+    filter_text: str | None = None,
+    order_by: str | None = "DESC",
+) -> dict[str, Any]:
+    """Read messages in a Google Chat space from a resource name or Chat URL."""
+    client = get_client()
+    payload = client.list_chat_messages(
+        space_name_or_url,
+        page_size=page_size,
+        page_token=page_token,
+        filter_text=filter_text,
+        order_by=order_by,
+    )
+    messages = [simplify_chat_message(message) for message in payload.get("messages", [])]
+    return {
+        "space": space_name_or_url,
+        "message_count": len(messages),
+        "messages": messages,
+        "next_page_token": payload.get("nextPageToken"),
+    }
+
+
+@mcp.tool()
+def list_google_chat_memberships(
+    space_name_or_url: str,
+    page_size: int = 100,
+    page_token: str | None = None,
+    filter_text: str | None = None,
+    show_groups: bool = False,
+    show_invited: bool = False,
+) -> dict[str, Any]:
+    """List users, bots, and optional groups invited to a Google Chat space."""
+    client = get_client()
+    payload = client.list_chat_memberships(
+        space_name_or_url,
+        page_size=page_size,
+        page_token=page_token,
+        filter_text=filter_text,
+        show_groups=show_groups,
+        show_invited=show_invited,
+    )
+    memberships = [simplify_chat_membership(item) for item in payload.get("memberships", [])]
+    return {
+        "space": space_name_or_url,
+        "membership_count": len(memberships),
+        "memberships": memberships,
+        "next_page_token": payload.get("nextPageToken"),
+    }
 
 
 @mcp.tool()

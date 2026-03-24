@@ -1,11 +1,12 @@
 # Google Workspace MCP
 
-Python MCP server for reading Google Docs and Google Sheets with structured output and better image handling.
+Python MCP server for reading Google Docs, Google Sheets, and Google Chat with structured output and better image handling.
 
 ## What It Does
 
 - Reads Google Docs as structured JSON with paragraphs, tables, inline objects, positioned objects, and image metadata.
 - Reads Google Sheets values, grid data, formulas, notes, hyperlinks, and chip runs.
+- Lists Google Chat spaces, space members, and messages as structured JSON.
 - Preserves partial text styling in Sheets cells via `text_runs` and an `annotated_text` helper field for segments such as strikethrough and underline.
 - Extracts over-grid sheet images from `Drive export -> XLSX`.
 - Detects in-cell `IMAGE("...")` formulas separately from drawing exports.
@@ -14,6 +15,7 @@ Python MCP server for reading Google Docs and Google Sheets with structured outp
 
 ```text
 google_workspace_mcp/
+  chat.py       # Google Chat normalization helpers
   cli.py        # command-line entrypoint
   client.py     # Google API auth + HTTP client
   common.py     # shared constants and parsing helpers
@@ -110,6 +112,7 @@ If no bundled client is shipped, the CLI falls back to prompting once for `Clien
    - Google Sheets API
    - Google Docs API
    - Google Drive API
+   - Google Chat API
 2. Create an OAuth client ID with application type `Desktop app`.
 3. Choose one setup method:
    - Easiest: run `python -m google_workspace_mcp auth login`, paste the `Client ID` and `Client Secret` once, and let the CLI save them for future logins.
@@ -132,7 +135,7 @@ $env:GOOGLE_OAUTH_CLIENT_SECRETS_FILE="C:\path\to\oauth-client-secret.json"
 python -m google_workspace_mcp auth
 ```
 
-After the first successful login, the server automatically uses the cached OAuth token for private Docs, Sheets, and Drive calls. You do not need to provide a separate API key for that flow.
+After the first successful login, the server automatically uses the cached OAuth token for private Docs, Sheets, Drive, and Google Chat calls. You do not need to provide a separate API key for that flow.
 
 This stores a refreshable token by default at:
 
@@ -176,6 +179,7 @@ Use a Google Cloud service account for the most reliable setup.
    - Google Sheets API
    - Google Docs API
    - Google Drive API
+   - Google Chat API if you plan to call the Chat tools with a user-scoped bearer token
 2. Create a service account key.
 3. Share the target Docs/Sheets files with the service account email.
 4. Set:
@@ -322,6 +326,10 @@ If you installed the package directly from GitHub into an environment on your PA
 
 - `diagnose_google_auth`
 - `resolve_google_file`
+- `list_google_chat_spaces`
+- `get_google_chat_space`
+- `read_google_chat_messages`
+- `list_google_chat_memberships`
 - `read_sheet_values`
 - `read_sheet_grid`
 - `get_sheet_row`
@@ -384,6 +392,34 @@ search_sheet(
 
 If you pass a Sheets URL with `gid`, `search_sheet()` searches only that tab by default instead of scanning the full workbook.
 
+### List Google Chat spaces
+
+```text
+list_google_chat_spaces()
+```
+
+### Read messages from a Google Chat space
+
+`read_google_chat_messages()` accepts either a resource name like `spaces/AAAA...` or a Chat UI URL that contains the space id.
+
+```text
+read_google_chat_messages(
+  "spaces/AAAA1234567",
+  50,
+  null,
+  null,
+  "DESC"
+)
+```
+
+### List members in a Google Chat space
+
+```text
+list_google_chat_memberships(
+  "spaces/AAAA1234567"
+)
+```
+
 ### Convert a sheet to JSON
 
 ```text
@@ -429,7 +465,9 @@ download_google_doc_images(
 
 - Google Docs image metadata is available directly through the Docs API, so document extraction is strong.
 - Google Sheets does not expose over-grid images as cleanly as cell data, so this server uses XLSX export to recover them.
+- Google Chat reads require OAuth scopes such as `chat.spaces.readonly`, `chat.messages.readonly`, and `chat.memberships.readonly`. If your cached token is older, rerun `python -m google_workspace_mcp auth login`.
+- Google Chat private user conversations are most reliable with OAuth user credentials. A plain service account usually needs a properly configured Chat app flow to access Chat resources.
 - In-cell `IMAGE("...")` formulas are detected separately from exported drawing images.
 - Private files shared to your user account should use the OAuth desktop client flow.
 - Private files shared to a robot identity should use a service account.
-- An API key is only suitable for public Sheets.
+- An API key is only suitable for public Sheets and can't read Google Chat.
