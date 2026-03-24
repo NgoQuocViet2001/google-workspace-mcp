@@ -862,6 +862,17 @@ class GoogleWorkspaceClient:
             )
         return error_message
 
+    def _normalize_chat_message_order_by(self, order_by: str | None) -> str | None:
+        if order_by is None:
+            return None
+        trimmed = order_by.strip()
+        if not trimmed:
+            return None
+        upper = trimmed.upper()
+        if upper in {"ASC", "DESC"}:
+            return f"createTime {upper}"
+        return trimmed
+
     def get_sheet_metadata(self, spreadsheet_id_or_url: str) -> dict[str, Any]:
         spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
         cached = self._sheet_metadata_cache.get(spreadsheet_id)
@@ -970,8 +981,9 @@ class GoogleWorkspaceClient:
             params["pageToken"] = page_token
         if filter_text:
             params["filter"] = filter_text
-        if order_by:
-            params["orderBy"] = order_by
+        normalized_order_by = self._normalize_chat_message_order_by(order_by)
+        if normalized_order_by:
+            params["orderBy"] = normalized_order_by
         if show_deleted:
             params["showDeleted"] = "true"
         return self._request(

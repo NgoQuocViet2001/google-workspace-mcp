@@ -200,8 +200,18 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
                 "pageSize": 25,
                 "pageToken": "next-token",
                 "filter": 'thread.name = "spaces/AAAAB3NzaC1yc2E/threads/123"',
-                "orderBy": "ASC",
+                "orderBy": "createTime ASC",
             },
+        )
+
+    def test_normalize_chat_message_order_by_expands_short_directions(self) -> None:
+        client = self.make_client()
+
+        self.assertEqual(client._normalize_chat_message_order_by("ASC"), "createTime ASC")
+        self.assertEqual(client._normalize_chat_message_order_by("desc"), "createTime DESC")
+        self.assertEqual(
+            client._normalize_chat_message_order_by("createTime DESC"),
+            "createTime DESC",
         )
 
     def test_get_chat_message_uses_message_name_and_chat_scope(self) -> None:
