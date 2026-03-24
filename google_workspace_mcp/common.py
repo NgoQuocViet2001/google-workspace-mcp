@@ -87,6 +87,10 @@ def default_oauth_token_file() -> Path:
     return Path.home() / ".google-workspace-mcp" / "oauth-token.json"
 
 
+def default_oauth_client_secrets_file() -> Path:
+    return Path.home() / ".google-workspace-mcp" / "oauth-client-secret.json"
+
+
 def normalize_scopes(raw_scopes: Any) -> list[str]:
     if raw_scopes is None:
         return []

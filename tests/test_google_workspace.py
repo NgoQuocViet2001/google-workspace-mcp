@@ -263,7 +263,19 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             downloaded_file = temp_path / "client_secret_123.apps.googleusercontent.com.json"
-            downloaded_file.write_text("{}", encoding="utf-8")
+            downloaded_file.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             client = self.make_client(
                 {
                     "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(temp_path / "oauth-client-secret.json"),
@@ -294,6 +306,119 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
 
         self.assertIn("not found", str(caught.exception))
         self.assertIn("apps.googleusercontent.com", str(caught.exception))
+
+    def test_oauth_flow_auto_discovers_client_secret_in_downloads_without_explicit_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            config_dir = home_dir / ".google-workspace-mcp"
+            config_dir.mkdir()
+            downloaded_file = config_dir / "client_secret_123.apps.googleusercontent.com.json"
+            downloaded_file.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"USERPROFILE": str(home_dir)}, clear=True):
+                client = workspace.GoogleWorkspaceClient()
+                with patch(
+                    "google_workspace_mcp.client.InstalledAppFlow.from_client_secrets_file",
+                    return_value=Mock(name="flow"),
+                ) as flow_factory:
+                    flow = client._oauth_flow([workspace.SHEETS_SCOPE])
+                    summary = client.auth_summary()
+
+        self.assertEqual(flow, flow_factory.return_value)
+        flow_factory.assert_called_once_with(
+            str(downloaded_file),
+            [workspace.SHEETS_SCOPE],
+        )
+        self.assertTrue(summary["oauth_client_configured"])
+        self.assertEqual(summary["oauth_client_source"], str(downloaded_file))
+
+    def test_oauth_flow_raises_helpful_error_when_multiple_client_secret_files_are_auto_discovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            config_dir = home_dir / ".google-workspace-mcp"
+            config_dir.mkdir()
+            payload = json.dumps(
+                {
+                    "installed": {
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                }
+            )
+            (config_dir / "client_secret_one.apps.googleusercontent.com.json").write_text(
+                payload,
+                encoding="utf-8",
+            )
+            (config_dir / "client_secret_two.apps.googleusercontent.com.json").write_text(
+                payload,
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"USERPROFILE": str(home_dir)}, clear=True):
+                client = workspace.GoogleWorkspaceClient()
+                with self.assertRaises(RuntimeError) as caught:
+                    client._oauth_flow([workspace.SHEETS_SCOPE])
+
+        self.assertIn("Multiple OAuth client secrets files were auto-discovered", str(caught.exception))
+        self.assertIn("Pass --client-secrets", str(caught.exception))
+
+    def test_run_oauth_login_persists_client_secret_file_to_default_config_location(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            source_dir = home_dir / "source"
+            source_dir.mkdir()
+            source_file = source_dir / "client_secret_123.apps.googleusercontent.com.json"
+            source_file.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "USERPROFILE": str(home_dir),
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(source_file),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(home_dir / ".google-workspace-mcp" / "oauth-token.json"),
+                },
+                clear=True,
+            ):
+                client = workspace.GoogleWorkspaceClient()
+                fake_credentials = Mock()
+                fake_credentials.to_json.return_value = '{"token":"access-token"}'
+                fake_credentials.refresh_token = "refresh-token"
+                fake_flow = Mock()
+                fake_flow.run_local_server.return_value = fake_credentials
+
+                with patch.object(client, "_oauth_flow", return_value=fake_flow):
+                    result = client.run_oauth_login([workspace.SHEETS_SCOPE], open_browser=False, port=0)
+
+            persisted_file = home_dir / ".google-workspace-mcp" / "oauth-client-secret.json"
+            self.assertTrue(persisted_file.exists())
+            self.assertEqual(result["oauth_client_secrets_file"], str(persisted_file))
+            self.assertEqual(result["notes"], [])
 
     def test_run_oauth_logout_deletes_cached_token_file_and_revokes_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

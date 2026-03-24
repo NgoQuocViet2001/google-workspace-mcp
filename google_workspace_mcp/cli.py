@@ -29,7 +29,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     auth_parser.add_argument(
         "--client-secrets",
         dest="client_secrets",
-        help="Path to the OAuth client secrets JSON file.",
+        help="Optional path to the OAuth client secrets JSON file. If omitted, the CLI looks for a desktop-app client JSON in ~/.google-workspace-mcp.",
     )
     auth_parser.add_argument(
         "--token-file",

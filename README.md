@@ -38,7 +38,13 @@ Use a Google OAuth client ID for Desktop App if the files are private but shared
 2. Create an OAuth client ID with application type `Desktop app`.
 3. Download the client secret JSON.
    The downloaded filename is often something like `client_secret_<id>.apps.googleusercontent.com.json`.
-4. Set:
+4. Put the desktop-app client JSON in:
+
+```powershell
+$HOME/.google-workspace-mcp/oauth-client-secret.json
+```
+
+Or set:
 
 ```powershell
 $env:GOOGLE_OAUTH_CLIENT_SECRETS_FILE="C:\path\to\oauth-client-secret.json"
@@ -69,6 +75,14 @@ If you need to overwrite the cached token with a specific client secret file and
 ```powershell
 python -m google_workspace_mcp auth login --client-secrets C:\path\to\oauth-client-secret.json --token-file C:\path\to\oauth-token.json
 ```
+
+If the desktop-app client JSON is already in `$HOME/.google-workspace-mcp/`, this shorter command also works:
+
+```powershell
+python -m google_workspace_mcp auth login
+```
+
+When you log in with `--client-secrets`, the CLI also copies that desktop-app client JSON into `$HOME/.google-workspace-mcp/oauth-client-secret.json` so future logins can omit the flag.
 
 To delete the cached OAuth token later, run:
 
@@ -167,6 +181,12 @@ To bootstrap OAuth for a private user account:
 
 ```powershell
 python -m google_workspace_mcp auth
+```
+
+If your `google-workspace-mcp` launcher is already available on `PATH`, the equivalent shorter command is:
+
+```powershell
+google-workspace-mcp auth login
 ```
 
 To inspect the current auth setup:
