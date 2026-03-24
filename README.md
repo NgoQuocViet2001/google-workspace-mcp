@@ -47,7 +47,7 @@ $env:GOOGLE_OAUTH_CLIENT_SECRETS_FILE="C:\path\to\oauth-client-secret.json"
 5. Run the one-time browser login flow:
 
 ```powershell
-google-workspace-mcp auth
+python -m google_workspace_mcp auth
 ```
 
 After the first successful login, the server automatically uses the cached OAuth token for private Docs, Sheets, and Drive calls. You do not need to provide a separate API key for that flow.
@@ -61,19 +61,19 @@ $HOME\.google-workspace-mcp\oauth-token.json
 Use this to inspect the cached token scopes and see which scopes are still missing:
 
 ```powershell
-google-workspace-mcp auth status
+python -m google_workspace_mcp auth status
 ```
 
 If you need to overwrite the cached token with a specific client secret file and token path, you can also run:
 
 ```powershell
-google-workspace-mcp auth login --client-secrets C:\path\to\oauth-client-secret.json --token-file C:\path\to\oauth-token.json
+python -m google_workspace_mcp auth login --client-secrets C:\path\to\oauth-client-secret.json --token-file C:\path\to\oauth-token.json
 ```
 
 To delete the cached OAuth token later, run:
 
 ```powershell
-google-workspace-mcp auth logout
+python -m google_workspace_mcp auth logout
 ```
 
 If you separately configured `GOOGLE_OAUTH_ACCESS_TOKEN`, remove that environment variable from your shell or MCP config as well.
@@ -136,7 +136,15 @@ pip install -r requirements.txt
 pip install "git+https://github.com/NgoQuocViet2001/google-workspace-mcp.git"
 ```
 
-If you install it this way, the console entrypoint is:
+After installing from GitHub, the most reliable way to run it on Windows is:
+
+```powershell
+python -m google_workspace_mcp
+```
+
+This avoids Windows `PATH` issues when `pip` installs console scripts into the user-site Scripts directory.
+
+If your Python Scripts directory is already on `PATH`, the standalone command also works:
 
 ```powershell
 google-workspace-mcp
@@ -152,25 +160,25 @@ cd <path-to-repo>
 Or, if you installed it directly from GitHub:
 
 ```powershell
-google-workspace-mcp
+python -m google_workspace_mcp
 ```
 
 To bootstrap OAuth for a private user account:
 
 ```powershell
-google-workspace-mcp auth
+python -m google_workspace_mcp auth
 ```
 
 To inspect the current auth setup:
 
 ```powershell
-google-workspace-mcp auth status
+python -m google_workspace_mcp auth status
 ```
 
 To remove the cached OAuth login:
 
 ```powershell
-google-workspace-mcp auth logout
+python -m google_workspace_mcp auth logout
 ```
 
 ## Codex MCP Configuration

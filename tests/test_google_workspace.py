@@ -1,5 +1,6 @@
 import json
 import os
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -362,6 +363,12 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
 
         self.assertTrue(result["oauth_access_token_configured"])
         self.assertTrue(any("GOOGLE_OAUTH_ACCESS_TOKEN" in note for note in result["notes"]))
+
+    def test_python_module_entrypoint_invokes_cli_main(self) -> None:
+        with patch("google_workspace_mcp.cli.main") as mocked_main:
+            runpy.run_module("google_workspace_mcp", run_name="__main__")
+
+        mocked_main.assert_called_once_with()
 
     def test_resolve_google_file_falls_back_to_sheet_metadata_when_drive_scope_is_missing(self) -> None:
         client = self.make_client()
