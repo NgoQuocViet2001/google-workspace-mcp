@@ -409,6 +409,35 @@ class GoogleWorkspaceClient:
             )
         return target_path, None
 
+    def persist_oauth_client_config(self, client_id: str, client_secret: str) -> Path:
+        normalized_client_id = client_id.strip()
+        normalized_client_secret = client_secret.strip()
+        if not normalized_client_id or not normalized_client_secret:
+            raise RuntimeError("Both OAuth client ID and client secret are required.")
+
+        target_path = default_oauth_client_secrets_file().expanduser()
+        payload = {
+            "installed": {
+                "client_id": normalized_client_id,
+                "client_secret": normalized_client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to save OAuth client configuration to '{target_path}': {exc}"
+            ) from exc
+
+        self.oauth_client_secrets_file = target_path
+        self.oauth_client_config_json = None
+        return target_path
+
     def _revoke_oauth_token(self, token: str) -> tuple[bool, str | None]:
         try:
             response = self.session.post(

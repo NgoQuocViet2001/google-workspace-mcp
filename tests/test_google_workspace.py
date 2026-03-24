@@ -3,6 +3,7 @@ import os
 import runpy
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -419,6 +420,95 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             self.assertTrue(persisted_file.exists())
             self.assertEqual(result["oauth_client_secrets_file"], str(persisted_file))
             self.assertEqual(result["notes"], [])
+
+    def test_persist_oauth_client_config_writes_default_config_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            default_client_file = home_dir / ".google-workspace-mcp" / "oauth-client-secret.json"
+            with patch.dict(os.environ, {"USERPROFILE": str(home_dir)}, clear=True), patch(
+                "google_workspace_mcp.client.default_oauth_client_secrets_file",
+                return_value=default_client_file,
+            ):
+                client = workspace.GoogleWorkspaceClient()
+                saved_path = client.persist_oauth_client_config("client-id", "client-secret")
+                summary = client.auth_summary()
+                self.assertTrue(saved_path.exists())
+                payload = json.loads(saved_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["installed"]["client_id"], "client-id")
+                self.assertEqual(payload["installed"]["client_secret"], "client-secret")
+                self.assertEqual(summary["oauth_client_source"], str(saved_path))
+
+    def test_cli_login_prompts_for_client_credentials_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            default_client_file = home_dir / ".google-workspace-mcp" / "oauth-client-secret.json"
+            with patch.dict(os.environ, {"USERPROFILE": str(home_dir)}, clear=True), patch(
+                "google_workspace_mcp.client.default_oauth_client_secrets_file",
+                return_value=default_client_file,
+            ), patch(
+                "google_workspace_mcp.cli.default_oauth_client_secrets_file",
+                return_value=default_client_file,
+            ):
+                client = workspace.GoogleWorkspaceClient()
+                fake_result = {"oauth_token_file": "token.json", "notes": []}
+
+                with patch("google_workspace_mcp.cli.parse_args", return_value=Namespace(
+                    command="auth",
+                    action="login",
+                    client_secrets=None,
+                    client_id=None,
+                    client_secret=None,
+                    token_file=None,
+                    scopes=None,
+                    port=None,
+                    no_browser=True,
+                )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch(
+                    "google_workspace_mcp.cli.input", return_value="client-id"
+                ), patch("google_workspace_mcp.cli.getpass.getpass", return_value="client-secret"), patch(
+                    "google_workspace_mcp.cli.sys.stdin.isatty", return_value=True
+                ), patch.object(client, "run_oauth_login", return_value=fake_result) as login_mock, patch(
+                    "google_workspace_mcp.cli.print"
+                ) as print_mock:
+                    workspace.main([])
+                persisted_file = default_client_file
+                self.assertTrue(persisted_file.exists())
+                login_mock.assert_called_once()
+                printed_payload = print_mock.call_args.args[0]
+                self.assertIn("oauth_client_secrets_file", printed_payload)
+
+    def test_cli_login_accepts_client_id_and_client_secret_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home_dir = Path(temp_dir)
+            default_client_file = home_dir / ".google-workspace-mcp" / "oauth-client-secret.json"
+            with patch.dict(os.environ, {"USERPROFILE": str(home_dir)}, clear=True), patch(
+                "google_workspace_mcp.client.default_oauth_client_secrets_file",
+                return_value=default_client_file,
+            ), patch(
+                "google_workspace_mcp.cli.default_oauth_client_secrets_file",
+                return_value=default_client_file,
+            ):
+                client = workspace.GoogleWorkspaceClient()
+                fake_result = {"oauth_token_file": "token.json", "notes": []}
+
+                with patch("google_workspace_mcp.cli.parse_args", return_value=Namespace(
+                    command="auth",
+                    action="login",
+                    client_secrets=None,
+                    client_id="client-id",
+                    client_secret="client-secret",
+                    token_file=None,
+                    scopes=None,
+                    port=None,
+                    no_browser=True,
+                )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch.object(
+                    client, "run_oauth_login", return_value=fake_result
+                ) as login_mock, patch("google_workspace_mcp.cli.print") as print_mock:
+                    workspace.main([])
+                persisted_file = default_client_file
+                self.assertTrue(persisted_file.exists())
+                login_mock.assert_called_once()
+                printed_payload = print_mock.call_args.args[0]
+                self.assertIn("oauth_client_secrets_file", printed_payload)
 
     def test_run_oauth_logout_deletes_cached_token_file_and_revokes_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

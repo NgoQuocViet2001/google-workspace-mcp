@@ -25,6 +25,71 @@ mcp_google_workspace.py  # compatibility wrapper for local scripts/config
 tests/
 ```
 
+## Quick Start
+
+### Install from GitHub
+
+```powershell
+pip install "git+https://github.com/NgoQuocViet2001/google-workspace-mcp.git"
+```
+
+The most reliable way to run it across platforms is:
+
+```powershell
+python -m google_workspace_mcp
+```
+
+If your Python Scripts directory is already on `PATH`, this shorter launcher works too:
+
+```powershell
+google-workspace-mcp
+```
+
+### Login OAuth quickly
+
+1. In Google Cloud, create an OAuth client ID with application type `Desktop app`.
+2. Run:
+
+```powershell
+python -m google_workspace_mcp auth login
+```
+
+3. If no local OAuth client config exists yet, the CLI prompts once for:
+   - `Client ID`
+   - `Client Secret`
+
+It then saves a reusable desktop-app client config at:
+
+```powershell
+$HOME/.google-workspace-mcp/oauth-client-secret.json
+```
+
+and opens the browser OAuth flow automatically. After the first successful login, the cached token is stored at:
+
+```powershell
+$HOME/.google-workspace-mcp/oauth-token.json
+```
+
+### Other common commands
+
+```powershell
+python -m google_workspace_mcp auth status
+python -m google_workspace_mcp auth logout
+```
+
+## CLI Commands
+
+Use `python -m google_workspace_mcp ...` everywhere below. If `google-workspace-mcp` is already on `PATH`, the same commands also work with that shorter launcher.
+
+- `python -m google_workspace_mcp`
+- `python -m google_workspace_mcp auth`
+- `python -m google_workspace_mcp auth login`
+- `python -m google_workspace_mcp auth login --client-secrets C:\path\to\oauth-client-secret.json`
+- `python -m google_workspace_mcp auth login --client-id <client-id> --client-secret <client-secret>`
+- `python -m google_workspace_mcp auth login --token-file C:\path\to\oauth-token.json`
+- `python -m google_workspace_mcp auth status`
+- `python -m google_workspace_mcp auth logout`
+
 ## Authentication Options
 
 ### Recommended for private files shared to your Google account: OAuth desktop client
@@ -36,9 +101,10 @@ Use a Google OAuth client ID for Desktop App if the files are private but shared
    - Google Docs API
    - Google Drive API
 2. Create an OAuth client ID with application type `Desktop app`.
-3. Download the client secret JSON.
-   The downloaded filename is often something like `client_secret_<id>.apps.googleusercontent.com.json`.
-4. Put the desktop-app client JSON in:
+3. Choose one setup method:
+   - Easiest: run `python -m google_workspace_mcp auth login`, paste the `Client ID` and `Client Secret` once, and let the CLI save them for future logins.
+   - If you prefer files: download the client secret JSON. The downloaded filename is often something like `client_secret_<id>.apps.googleusercontent.com.json`.
+4. Optional file-based setup:
 
 ```powershell
 $HOME/.google-workspace-mcp/oauth-client-secret.json
@@ -82,7 +148,7 @@ If the desktop-app client JSON is already in `$HOME/.google-workspace-mcp/`, thi
 python -m google_workspace_mcp auth login
 ```
 
-When you log in with `--client-secrets`, the CLI also copies that desktop-app client JSON into `$HOME/.google-workspace-mcp/oauth-client-secret.json` so future logins can omit the flag.
+When you log in with `--client-secrets`, or with `--client-id` plus `--client-secret`, the CLI also saves a reusable desktop-app client JSON into `$HOME/.google-workspace-mcp/oauth-client-secret.json` so future logins can omit the extra flags.
 
 To delete the cached OAuth token later, run:
 
@@ -150,13 +216,13 @@ pip install -r requirements.txt
 pip install "git+https://github.com/NgoQuocViet2001/google-workspace-mcp.git"
 ```
 
-After installing from GitHub, the most reliable way to run it on Windows is:
+After installing from GitHub, the most reliable way to run it is:
 
 ```powershell
 python -m google_workspace_mcp
 ```
 
-This avoids Windows `PATH` issues when `pip` installs console scripts into the user-site Scripts directory.
+This avoids `PATH` issues when `pip` installs console scripts into a user-site Scripts directory.
 
 If your Python Scripts directory is already on `PATH`, the standalone command also works:
 
