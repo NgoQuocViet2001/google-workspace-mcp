@@ -49,7 +49,9 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
 
         self.assertEqual(context["space_name"], "spaces/AAQAyxdRoZo")
         self.assertEqual(context["thread_name"], "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0")
-        self.assertEqual(context["message_name"], "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0")
+        self.assertEqual(context["message_id"], "WNSdv6IyQf0")
+        self.assertIsNone(context["message_name"])
+        self.assertEqual(context["message_lookup_hint"], "WNSdv6IyQf0")
 
     def test_extract_chat_thread_and_message_names_accept_room_url(self) -> None:
         url = "https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10"
@@ -57,10 +59,9 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             workspace.extract_chat_thread_name(url),
             "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0",
         )
-        self.assertEqual(
-            workspace.extract_chat_message_name(url),
-            "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
-        )
+        with self.assertRaises(ValueError) as caught:
+            workspace.extract_chat_message_name(url)
+        self.assertIn("don't reliably expose the API message ID", str(caught.exception))
 
     def test_get_sheet_values_uses_gid_for_row_only_range(self) -> None:
         client = self.make_client()
@@ -218,7 +219,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         client = self.make_client()
         client._request = Mock(return_value={"name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0"})
 
-        client.get_chat_message("https://chat.google.com/room/AAQAyxdRoZo/jVIpmenXnO0/WNSdv6IyQf0?cls=10")
+        client.get_chat_message("spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0")
 
         client._request.assert_called_once_with(
             "GET",
@@ -302,7 +303,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(result["messages"][0]["formatted_text"], "*Hello* team")
         self.assertEqual(result["messages"][0]["sender"]["display_name"], "Viet Ngo")
 
-    def test_read_google_chat_thread_tool_returns_linked_and_root_messages(self) -> None:
+    def test_read_google_chat_thread_tool_returns_root_and_lookup_warning_when_room_token_cannot_map(self) -> None:
         client = self.make_client()
         client.list_chat_thread_messages = Mock(
             return_value={
@@ -313,18 +314,11 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
                         "threadReply": False,
                     },
                     {
-                        "name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
+                        "name": "spaces/AAQAyxdRoZo/messages/reply-msg",
                         "text": "Reply message",
                         "threadReply": True,
                     },
                 ]
-            }
-        )
-        client.get_chat_message = Mock(
-            return_value={
-                "name": "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
-                "text": "Reply message",
-                "threadReply": True,
             }
         )
 
@@ -335,7 +329,8 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
 
         self.assertEqual(result["space"], "spaces/AAQAyxdRoZo")
         self.assertEqual(result["thread"], "spaces/AAQAyxdRoZo/threads/jVIpmenXnO0")
-        self.assertEqual(result["linked_message"]["name"], "spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0")
+        self.assertIsNone(result["linked_message"])
+        self.assertIn("couldn't be mapped", result["linked_message_lookup_warning"])
         self.assertEqual(result["root_message"]["name"], "spaces/AAQAyxdRoZo/messages/root-msg")
         self.assertEqual(result["message_count"], 2)
 

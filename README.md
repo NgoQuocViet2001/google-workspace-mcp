@@ -430,6 +430,8 @@ When the URL includes a message ID, the response includes both:
 - `linked_message`: the exact message referenced by the link
 - `root_message`: the first message in the thread
 
+If Google Chat doesn't expose an API message resource that matches the URL token, the response sets `linked_message` to `null` and explains the limitation in `linked_message_lookup_warning`.
+
 ### List members in a Google Chat space
 
 ```text
@@ -485,6 +487,7 @@ download_google_doc_images(
 - Google Sheets does not expose over-grid images as cleanly as cell data, so this server uses XLSX export to recover them.
 - Google Chat reads require OAuth scopes such as `chat.spaces.readonly`, `chat.messages.readonly`, and `chat.memberships.readonly`. If your cached token is older, rerun `python -m google_workspace_mcp auth login`.
 - Google Chat API requests also require a configured Chat app in the same Google Cloud project. In `Google Chat API > Configuration`, fill in at least `App name`, `Avatar URL`, and `Description`, then save.
+- Google Chat room URLs always expose the space ID, and often work for thread reads, but the final URL token isn't guaranteed to be a `spaces/{space}/messages/{message}` API resource name. In those cases the server can still return the thread and root message, but not reliably resolve the exact linked reply through the Chat API alone.
 - Google Chat private user conversations are most reliable with OAuth user credentials. A plain service account usually needs a properly configured Chat app flow to access Chat resources.
 - In-cell `IMAGE("...")` formulas are detected separately from exported drawing images.
 - Private files shared to your user account should use the OAuth desktop client flow.

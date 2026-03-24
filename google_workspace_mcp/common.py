@@ -173,6 +173,7 @@ def parse_chat_url_context(value: str) -> dict[str, Any]:
             "thread_name": None,
             "message_id": message_id,
             "message_name": trimmed,
+            "message_lookup_hint": message_id,
         }
 
     thread_match = CHAT_THREAD_RESOURCE_RE.fullmatch(trimmed)
@@ -186,6 +187,7 @@ def parse_chat_url_context(value: str) -> dict[str, Any]:
             "thread_name": trimmed,
             "message_id": None,
             "message_name": None,
+            "message_lookup_hint": None,
         }
 
     if CHAT_SPACE_RESOURCE_RE.fullmatch(trimmed):
@@ -197,6 +199,7 @@ def parse_chat_url_context(value: str) -> dict[str, Any]:
             "thread_name": None,
             "message_id": None,
             "message_name": None,
+            "message_lookup_hint": None,
         }
 
     embedded_message_match = CHAT_MESSAGE_EMBEDDED_RE.search(trimmed)
@@ -233,7 +236,8 @@ def parse_chat_url_context(value: str) -> dict[str, Any]:
                 "thread_id": thread_id,
                 "thread_name": f"spaces/{space_id}/threads/{thread_id}" if thread_id else None,
                 "message_id": message_id,
-                "message_name": f"spaces/{space_id}/messages/{message_id}" if message_id else None,
+                "message_name": None,
+                "message_lookup_hint": message_id,
             }
 
     for pattern in (CHAT_ROOM_RE,):
@@ -249,6 +253,7 @@ def parse_chat_url_context(value: str) -> dict[str, Any]:
             "thread_name": None,
             "message_id": None,
             "message_name": None,
+            "message_lookup_hint": None,
         }
 
     raise ValueError(f"Could not extract a Google Chat space name from: {value}")
@@ -269,7 +274,11 @@ def extract_chat_message_name(value: str) -> str:
     message_name = parse_chat_url_context(value).get("message_name")
     if message_name:
         return message_name
-    raise ValueError(f"Could not extract a Google Chat message name from: {value}")
+    raise ValueError(
+        "Could not extract a Google Chat API message resource name from this value. "
+        "Google Chat room URLs don't reliably expose the API message ID; use a "
+        "`spaces/{space}/messages/{message}` resource name returned by the Chat API."
+    )
 
 
 def parse_sheet_url_context(value: str) -> dict[str, Any]:

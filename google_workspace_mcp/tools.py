@@ -173,15 +173,32 @@ def read_google_chat_thread(
     root_message = next((message for message in messages if not message.get("thread_reply")), None)
     if root_message is None and messages:
         root_message = messages[0]
-    linked_message = (
-        simplify_chat_message(client.get_chat_message(context["message_name"]))
-        if context.get("message_name")
-        else None
-    )
+    linked_message = None
+    linked_message_lookup_warning = None
+    if context.get("message_name"):
+        linked_message = simplify_chat_message(client.get_chat_message(context["message_name"]))
+    elif context.get("message_lookup_hint"):
+        hint = context["message_lookup_hint"]
+        linked_message = next(
+            (
+                message
+                for message in messages
+                if str(message.get("name", "")).endswith(f"/{hint}")
+                or message.get("client_assigned_message_id") == hint
+            ),
+            None,
+        )
+        if linked_message is None:
+            linked_message_lookup_warning = (
+                "Google Chat room URLs don't expose a message resource ID that can always be resolved through the "
+                "Chat API. The thread was loaded successfully, but the exact linked reply couldn't be mapped from "
+                "the URL token alone."
+            )
     return {
         "space": context.get("space_name"),
         "thread": context.get("thread_name"),
         "linked_message": linked_message,
+        "linked_message_lookup_warning": linked_message_lookup_warning,
         "root_message": root_message,
         "message_count": len(messages),
         "messages": messages,
