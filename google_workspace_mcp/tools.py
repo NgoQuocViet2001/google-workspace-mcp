@@ -17,8 +17,11 @@ from .common import (
     detect_google_file_kind,
     extract_file_id,
     parse_chat_url_context,
+    parse_sheet_url_context,
     quote_sheet_title,
     safe_filename,
+    split_sheet_range,
+    unquote_sheet_title,
 )
 from .docs import download_doc_images_payload, simplify_document
 from .server import mcp
@@ -26,9 +29,60 @@ from .sheets import (
     collect_formula_images,
     extract_sheet_images_from_xlsx,
     flatten_values_rows,
+    grid_from_csv_rows,
     normalize_headers,
+    parse_csv_rows,
     simplify_grid_data,
+    values_from_csv_rows,
 )
+
+
+def _is_missing_sheets_scope_error(exc: RuntimeError) -> bool:
+    return "spreadsheets.readonly" in str(exc).lower()
+
+
+def _range_sheet_name(range_a1: str | None) -> str | None:
+    if not range_a1:
+        return None
+    sheet_name, _ = split_sheet_range(range_a1)
+    if not sheet_name:
+        return None
+    return unquote_sheet_title(sheet_name)
+
+
+def _drive_export_csv_fallback(
+    client: Any,
+    spreadsheet_id_or_url: str,
+    range_a1: str | None,
+    *,
+    major_dimension: str = "ROWS",
+) -> dict[str, Any]:
+    context = parse_sheet_url_context(spreadsheet_id_or_url)
+    gid = context.get("gid")
+    effective_range = range_a1.strip() if range_a1 else context.get("range_a1")
+    if gid is None:
+        raise RuntimeError("Drive export fallback requires a Google Sheets URL that includes `gid`.")
+
+    csv_text = client.export_sheet_via_drive(
+        spreadsheet_id_or_url,
+        export_format="csv",
+        gid=gid,
+        range_a1=effective_range,
+    ).decode("utf-8-sig")
+    rows = parse_csv_rows(csv_text)
+    return {
+        "spreadsheet_id": extract_file_id(spreadsheet_id_or_url, kind="sheet"),
+        "gid": gid,
+        "range_a1": effective_range,
+        "sheet_name": _range_sheet_name(effective_range),
+        "rows": rows,
+        "values": values_from_csv_rows(rows, major_dimension=major_dimension),
+        "auth_warning": (
+            "Cached OAuth token is missing spreadsheets.readonly, so this response came from "
+            "Drive export fallback. Formulas, notes, hyperlinks, and rich text metadata may be omitted."
+        ),
+        "source": "drive_export_csv_fallback",
+    }
 
 
 @mcp.tool()
@@ -244,13 +298,32 @@ def read_sheet_values(
 ) -> dict[str, Any]:
     """Read raw Google Sheets values for an A1 range."""
     client = get_client()
-    payload = client.get_sheet_values(
-        spreadsheet_id_or_url,
-        range_a1,
-        major_dimension=major_dimension,
-        value_render_option=value_render_option,
-        date_time_render_option=date_time_render_option,
-    )
+    try:
+        payload = client.get_sheet_values(
+            spreadsheet_id_or_url,
+            range_a1,
+            major_dimension=major_dimension,
+            value_render_option=value_render_option,
+            date_time_render_option=date_time_render_option,
+        )
+    except RuntimeError as exc:
+        if not _is_missing_sheets_scope_error(exc):
+            raise
+        fallback = _drive_export_csv_fallback(
+            client,
+            spreadsheet_id_or_url,
+            range_a1,
+            major_dimension=major_dimension,
+        )
+        return {
+            "spreadsheet_id": fallback["spreadsheet_id"],
+            "range": fallback["range_a1"],
+            "major_dimension": major_dimension,
+            "row_count": len(fallback["values"]),
+            "values": fallback["values"],
+            "auth_warning": fallback["auth_warning"],
+            "source": fallback["source"],
+        }
     return {
         "spreadsheet_id": payload.get("spreadsheetId"),
         "range": payload.get("range"),
@@ -264,11 +337,33 @@ def read_sheet_values(
 def read_sheet_grid(spreadsheet_id_or_url: str, range_a1: str | None = None) -> dict[str, Any]:
     """Read Google Sheets grid data including formatted values, formulas, notes, and links."""
     client = get_client()
-    payload = client.get_sheet_grid(
-        spreadsheet_id_or_url,
-        range_a1,
-        fields=SHEET_GRID_FIELDS,
-    )
+    try:
+        payload = client.get_sheet_grid(
+            spreadsheet_id_or_url,
+            range_a1,
+            fields=SHEET_GRID_FIELDS,
+        )
+    except RuntimeError as exc:
+        if not _is_missing_sheets_scope_error(exc):
+            raise
+        fallback = _drive_export_csv_fallback(client, spreadsheet_id_or_url, range_a1)
+        title = None
+        try:
+            title = client.get_drive_file(spreadsheet_id_or_url).get("name")
+        except RuntimeError:
+            title = None
+        return {
+            "spreadsheet_id": fallback["spreadsheet_id"],
+            "title": title,
+            "sheets": grid_from_csv_rows(
+                fallback["rows"],
+                range_a1=fallback["range_a1"],
+                sheet_name=fallback["sheet_name"],
+                sheet_id=fallback["gid"],
+            ),
+            "auth_warning": fallback["auth_warning"],
+            "source": fallback["source"],
+        }
     return {
         "spreadsheet_id": payload.get("spreadsheetId"),
         "title": payload.get("properties", {}).get("title"),

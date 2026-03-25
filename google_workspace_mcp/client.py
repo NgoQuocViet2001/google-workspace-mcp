@@ -287,6 +287,38 @@ class GoogleWorkspaceClient:
         cached_scopes = set(self._cached_oauth_token_scopes())
         return [scope for scope in sorted(set(required_scopes)) if scope not in cached_scopes]
 
+    def _cached_oauth_capabilities(self) -> dict[str, bool]:
+        cached_scopes = set(self._cached_oauth_token_scopes())
+        return {
+            "drive_readonly": DRIVE_SCOPE in cached_scopes,
+            "docs_readonly": DOCS_SCOPE in cached_scopes,
+            "sheets_readonly": SHEETS_SCOPE in cached_scopes,
+            "chat_spaces_readonly": CHAT_SPACES_SCOPE in cached_scopes,
+            "chat_messages_readonly": CHAT_MESSAGES_SCOPE in cached_scopes,
+            "chat_memberships_readonly": CHAT_MEMBERSHIPS_SCOPE in cached_scopes,
+            "sheets_url_drive_export_fallback": DRIVE_SCOPE in cached_scopes and SHEETS_SCOPE not in cached_scopes,
+        }
+
+    def _auth_summary_notes(self, cached_oauth_capabilities: dict[str, bool]) -> list[str]:
+        notes = [
+            "Public Sheets can be read with GOOGLE_API_KEY.",
+            "OAuth desktop client credentials can read private files shared to your Google account.",
+            "Docs, Drive, and Google Chat reads are most reliable with OAuth user credentials or an OAuth access token.",
+            "A service account must be granted access to private files or shared drives.",
+        ]
+        if cached_oauth_capabilities["sheets_url_drive_export_fallback"]:
+            notes.append(
+                "This cached token can still read Google Sheets URLs that include gid/range via Drive export fallback. "
+                "Expect values-only output until you re-run `google-workspace-mcp auth login` with "
+                "spreadsheets.readonly."
+            )
+        if cached_oauth_capabilities["drive_readonly"] and not cached_oauth_capabilities["docs_readonly"]:
+            notes.append(
+                "drive.readonly does not unlock Google Docs content reads. Google Docs still require "
+                "documents.readonly."
+            )
+        return notes
+
     def auth_summary(self) -> dict[str, Any]:
         resolved_oauth_client_file = self._resolved_oauth_client_secrets_file()
         bundled_oauth_client_config = self._bundled_oauth_client_config_json()
@@ -313,6 +345,7 @@ class GoogleWorkspaceClient:
         elif self.service_account_json:
             service_account_source = "GOOGLE_SERVICE_ACCOUNT_JSON"
         cached_oauth_scopes = self._cached_oauth_token_scopes()
+        cached_oauth_capabilities = self._cached_oauth_capabilities()
         return {
             "api_key_configured": bool(self.api_key),
             "oauth_access_token_configured": bool(self.oauth_access_token),
@@ -324,16 +357,12 @@ class GoogleWorkspaceClient:
             "oauth_token_format": self._cached_oauth_token_format(),
             "oauth_token_scopes": cached_oauth_scopes,
             "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_READONLY_SCOPES),
+            "oauth_token_capabilities": cached_oauth_capabilities,
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,
             "recommended_mode": self._recommended_mode(),
             "active_auth_mode": self._active_auth_mode(),
-            "notes": [
-                "Public Sheets can be read with GOOGLE_API_KEY.",
-                "OAuth desktop client credentials can read private files shared to your Google account.",
-                "Docs, Drive, and Google Chat reads are most reliable with OAuth user credentials or an OAuth access token.",
-                "A service account must be granted access to private files or shared drives.",
-            ],
+            "notes": self._auth_summary_notes(cached_oauth_capabilities),
         }
 
     def _recommended_mode(self) -> str:
@@ -916,6 +945,30 @@ class GoogleWorkspaceClient:
             expect_json=False,
         )
         return metadata, content
+
+    def export_sheet_via_drive(
+        self,
+        spreadsheet_id_or_url: str,
+        *,
+        export_format: str,
+        gid: int,
+        range_a1: str | None = None,
+    ) -> bytes:
+        spreadsheet_id = extract_file_id(spreadsheet_id_or_url, kind="sheet")
+        params: dict[str, Any] = {
+            "format": export_format,
+            "gid": str(gid),
+        }
+        if range_a1:
+            params["range"] = range_a1
+        return self._request(
+            "GET",
+            f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export",
+            scopes=[DRIVE_SCOPE],
+            allow_api_key=False,
+            params=params,
+            expect_json=False,
+        )
 
     def get_doc(self, document_id_or_url: str) -> dict[str, Any]:
         document_id = extract_file_id(document_id_or_url, kind="doc")

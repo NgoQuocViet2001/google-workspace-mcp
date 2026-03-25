@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import io
+import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -9,14 +12,19 @@ from xml.etree import ElementTree as ET
 from .common import (
     IMAGE_FORMULA_RE,
     NS,
+    ROW_ONLY_RANGE_RE,
     a1_from_zero_based,
     compact_dict,
     rel_join,
     safe_filename,
     scalar_value,
+    split_sheet_range,
     text_style_summary,
 )
 from .docs import ensure_output_dir
+
+
+A1_CELL_RE = re.compile(r"^(?P<column>[A-Za-z]*)(?P<row>\d+)$")
 
 
 def simplify_text_runs(text_runs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -193,6 +201,94 @@ def normalize_headers(header_values: list[Any]) -> list[str]:
 
 def flatten_values_rows(values_payload: dict[str, Any]) -> list[list[Any]]:
     return values_payload.get("values", [])
+
+
+def parse_csv_rows(csv_text: str) -> list[list[str]]:
+    return [row for row in csv.reader(io.StringIO(csv_text))]
+
+
+def transpose_rows(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return []
+    width = max(len(row) for row in rows)
+    return [[row[column] if column < len(row) else "" for row in rows] for column in range(width)]
+
+
+def values_from_csv_rows(rows: list[list[str]], *, major_dimension: str = "ROWS") -> list[list[str]]:
+    if major_dimension.upper() == "COLUMNS":
+        return transpose_rows(rows)
+    return rows
+
+
+def _column_index_from_a1(column_letters: str) -> int:
+    value = 0
+    for letter in column_letters.upper():
+        value = value * 26 + (ord(letter) - 64)
+    return value
+
+
+def range_start_from_a1(range_a1: str | None) -> tuple[int, int]:
+    if not range_a1:
+        return 1, 1
+    _, body = split_sheet_range(range_a1)
+    trimmed = body.strip()
+    if not trimmed:
+        return 1, 1
+    if ROW_ONLY_RANGE_RE.fullmatch(trimmed):
+        return int(trimmed.split(":", 1)[0]), 1
+    start = trimmed.split(":", 1)[0]
+    match = A1_CELL_RE.fullmatch(start)
+    if not match:
+        return 1, 1
+    return int(match.group("row")), _column_index_from_a1(match.group("column") or "A")
+
+
+def grid_from_csv_rows(
+    rows: list[list[str]],
+    *,
+    range_a1: str | None = None,
+    sheet_name: str | None = None,
+    sheet_id: int | None = None,
+) -> list[dict[str, Any]]:
+    start_row, start_column = range_start_from_a1(range_a1)
+    row_count = len(rows)
+    column_count = max((len(row) for row in rows), default=0)
+    simplified_rows = []
+    for row_offset, row in enumerate(rows):
+        simplified_cells = []
+        for column_offset, value in enumerate(row):
+            row_index = start_row + row_offset
+            column_index = start_column + column_offset
+            simplified_cells.append(
+                compact_dict(
+                    {
+                        "a1": a1_from_zero_based(row_index - 1, column_index - 1),
+                        "row_index": row_index,
+                        "column_index": column_index,
+                        "formatted_value": value if value != "" else None,
+                        "user_entered_value": value if value != "" else None,
+                        "effective_value": value if value != "" else None,
+                    }
+                )
+            )
+        simplified_rows.append({"row_index": start_row + row_offset, "cells": simplified_cells})
+    return [
+        compact_dict(
+            {
+                "sheet_id": sheet_id,
+                "sheet_name": sheet_name,
+                "row_count": row_count,
+                "column_count": column_count,
+                "data": [
+                    {
+                        "start_row": start_row,
+                        "start_column": start_column,
+                        "rows": simplified_rows,
+                    }
+                ],
+            }
+        )
+    ]
 
 
 def parse_relationships(xml_bytes: bytes) -> dict[str, str]:

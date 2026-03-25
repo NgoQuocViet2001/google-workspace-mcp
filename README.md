@@ -149,6 +149,8 @@ Use this to inspect the cached token scopes and see which scopes are still missi
 python -m google_workspace_mcp auth status
 ```
 
+If `auth status` shows only `drive.readonly`, Sheets URLs that include `gid` and `range` can still be read through the server's Drive export fallback. That fallback returns values-oriented output and omits formulas, notes, hyperlinks, and rich text metadata until you re-run `python -m google_workspace_mcp auth login` with `spreadsheets.readonly`.
+
 If you need to overwrite the cached token with a specific client secret file and token path, you can also run:
 
 ```powershell
@@ -369,6 +371,8 @@ read_sheet_values(
 )
 ```
 
+When the cached OAuth token has `drive.readonly` but not `spreadsheets.readonly`, this still succeeds by exporting the addressed tab/range as CSV behind the scenes. The response includes `source: "drive_export_csv_fallback"` and an `auth_warning` so callers know richer grid metadata is unavailable.
+
 ### Read grid data with formulas, notes, and links
 
 ```text
@@ -493,3 +497,4 @@ download_google_doc_images(
 - Private files shared to your user account should use the OAuth desktop client flow.
 - Private files shared to a robot identity should use a service account.
 - An API key is only suitable for public Sheets and can't read Google Chat.
+- `drive.readonly` alone is enough for the Sheets URL fallback described above, but Google Docs still require `documents.readonly`.
