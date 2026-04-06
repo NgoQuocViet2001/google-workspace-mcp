@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .client import GoogleWorkspaceClient, get_client
-from .common import DEFAULT_READONLY_SCOPES, default_oauth_client_secrets_file
+from .common import AUTH_SCOPE_PRESETS, DEFAULT_READONLY_SCOPES, default_oauth_client_secrets_file, merge_scopes
 from .server import mcp
 from . import tools as _tools  # noqa: F401
 
@@ -51,7 +51,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--scope",
         dest="scopes",
         action="append",
-        help="Additional scope to request. Repeat for multiple scopes.",
+        help="Additional scope to request beyond the chosen preset. Repeat for multiple scopes.",
+    )
+    auth_parser.add_argument(
+        "--scope-preset",
+        choices=tuple(AUTH_SCOPE_PRESETS.keys()),
+        default="readonly",
+        help=(
+            "Named scope bundle to request. "
+            "`readonly` keeps the existing read-only behavior, `sheets-write` adds Sheets edit scope, "
+            "and `readwrite` also upgrades Google Docs to write scope."
+        ),
     )
     auth_parser.add_argument(
         "--port",
@@ -99,6 +109,11 @@ def _prepare_oauth_client_config(client: GoogleWorkspaceClient, args: argparse.N
     return client.persist_oauth_client_config(client_id, client_secret)
 
 
+def _resolve_requested_scopes(args: argparse.Namespace) -> list[str]:
+    preset_scopes = AUTH_SCOPE_PRESETS.get(args.scope_preset, DEFAULT_READONLY_SCOPES)
+    return merge_scopes(preset_scopes, args.scopes or [])
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "auth":
@@ -119,7 +134,7 @@ def main(argv: list[str] | None = None) -> None:
                 return
             prepared_client_config = _prepare_oauth_client_config(client, args)
             result = client.run_oauth_login(
-                scopes=args.scopes or DEFAULT_READONLY_SCOPES,
+                scopes=_resolve_requested_scopes(args),
                 open_browser=not args.no_browser,
                 port=args.port,
             )

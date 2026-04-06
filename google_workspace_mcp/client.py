@@ -20,10 +20,13 @@ from .common import (
     CHAT_MESSAGES_SCOPE,
     CHAT_SPACES_SCOPE,
     DEFAULT_READONLY_SCOPES,
+    DEFAULT_READWRITE_SCOPES,
     DOCS_SCOPE,
+    DOCS_WRITE_SCOPE,
     DRIVE_SCOPE,
     MAX_SHEET_COLUMN_A1,
     SHEETS_SCOPE,
+    SHEETS_WRITE_SCOPE,
     column_to_a1,
     default_oauth_client_secrets_file,
     default_oauth_token_file,
@@ -38,6 +41,7 @@ from .common import (
     path_from_env,
     quote_range,
     quote_sheet_title,
+    scope_is_satisfied,
     split_sheet_range,
     unquote_sheet_title,
 )
@@ -284,19 +288,24 @@ class GoogleWorkspaceClient:
         return normalize_scopes(payload.get("scopes"))
 
     def _missing_cached_oauth_scopes(self, required_scopes: Iterable[str]) -> list[str]:
-        cached_scopes = set(self._cached_oauth_token_scopes())
-        return [scope for scope in sorted(set(required_scopes)) if scope not in cached_scopes]
+        cached_scopes = self._cached_oauth_token_scopes()
+        return [
+            scope for scope in sorted(set(required_scopes)) if not scope_is_satisfied(cached_scopes, scope)
+        ]
 
     def _cached_oauth_capabilities(self) -> dict[str, bool]:
-        cached_scopes = set(self._cached_oauth_token_scopes())
+        cached_scopes = self._cached_oauth_token_scopes()
         return {
-            "drive_readonly": DRIVE_SCOPE in cached_scopes,
-            "docs_readonly": DOCS_SCOPE in cached_scopes,
-            "sheets_readonly": SHEETS_SCOPE in cached_scopes,
-            "chat_spaces_readonly": CHAT_SPACES_SCOPE in cached_scopes,
-            "chat_messages_readonly": CHAT_MESSAGES_SCOPE in cached_scopes,
-            "chat_memberships_readonly": CHAT_MEMBERSHIPS_SCOPE in cached_scopes,
-            "sheets_url_drive_export_fallback": DRIVE_SCOPE in cached_scopes and SHEETS_SCOPE not in cached_scopes,
+            "drive_readonly": scope_is_satisfied(cached_scopes, DRIVE_SCOPE),
+            "docs_readonly": scope_is_satisfied(cached_scopes, DOCS_SCOPE),
+            "docs_write": scope_is_satisfied(cached_scopes, DOCS_WRITE_SCOPE),
+            "sheets_readonly": scope_is_satisfied(cached_scopes, SHEETS_SCOPE),
+            "sheets_write": scope_is_satisfied(cached_scopes, SHEETS_WRITE_SCOPE),
+            "chat_spaces_readonly": scope_is_satisfied(cached_scopes, CHAT_SPACES_SCOPE),
+            "chat_messages_readonly": scope_is_satisfied(cached_scopes, CHAT_MESSAGES_SCOPE),
+            "chat_memberships_readonly": scope_is_satisfied(cached_scopes, CHAT_MEMBERSHIPS_SCOPE),
+            "sheets_url_drive_export_fallback": scope_is_satisfied(cached_scopes, DRIVE_SCOPE)
+            and not scope_is_satisfied(cached_scopes, SHEETS_SCOPE),
         }
 
     def _auth_summary_notes(self, cached_oauth_capabilities: dict[str, bool]) -> list[str]:
@@ -316,6 +325,11 @@ class GoogleWorkspaceClient:
             notes.append(
                 "drive.readonly does not unlock Google Docs content reads. Google Docs still require "
                 "documents.readonly."
+            )
+        if not cached_oauth_capabilities["sheets_write"]:
+            notes.append(
+                "Google Sheets edits require spreadsheets write scope. Re-run "
+                "`google-workspace-mcp auth login --scope-preset sheets-write` to refresh the cached token."
             )
         return notes
 
@@ -357,6 +371,7 @@ class GoogleWorkspaceClient:
             "oauth_token_format": self._cached_oauth_token_format(),
             "oauth_token_scopes": cached_oauth_scopes,
             "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_READONLY_SCOPES),
+            "oauth_token_missing_readwrite_scopes": self._missing_cached_oauth_scopes(DEFAULT_READWRITE_SCOPES),
             "oauth_token_capabilities": cached_oauth_capabilities,
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,
@@ -844,6 +859,7 @@ class GoogleWorkspaceClient:
         *,
         scopes: Iterable[str] = (),
         params: dict[str, Any] | None = None,
+        json_body: Any | None = None,
         allow_api_key: bool = False,
         expect_json: bool = True,
     ) -> Any:
@@ -856,6 +872,7 @@ class GoogleWorkspaceClient:
                 url,
                 params=final_params,
                 headers=headers,
+                json=json_body,
                 timeout=self.timeout,
             )
             if response.ok or response.status_code not in {429, 500, 502, 503, 504} or attempt_index == 3:
@@ -877,6 +894,8 @@ class GoogleWorkspaceClient:
                 f"Google API returned HTTP {response.status_code} for {url}: {error_message}"
             )
         if expect_json:
+            if response.status_code == 204 or not response.content:
+                return {}
             return response.json()
         return response.content
 
@@ -922,16 +941,17 @@ class GoogleWorkspaceClient:
         self._sheet_metadata_cache[spreadsheet_id] = metadata
         return metadata
 
-    def get_drive_file(self, file_id_or_url: str) -> dict[str, Any]:
+    def get_drive_file(self, file_id_or_url: str, *, include_capabilities: bool = False) -> dict[str, Any]:
         file_id = extract_file_id(file_id_or_url)
+        fields = "id,name,mimeType,webViewLink,iconLink,owners(displayName,emailAddress),exportLinks"
+        if include_capabilities:
+            fields += ",capabilities(canEdit,canModifyContent)"
         return self._request(
             "GET",
             f"https://www.googleapis.com/drive/v3/files/{file_id}",
             scopes=[DRIVE_SCOPE],
             allow_api_key=True,
-            params={
-                "fields": "id,name,mimeType,webViewLink,iconLink,owners(displayName,emailAddress),exportLinks"
-            },
+            params={"fields": fields},
         )
 
     def export_drive_file(self, file_id_or_url: str, mime_type: str) -> tuple[dict[str, Any], bytes]:
@@ -1159,6 +1179,44 @@ class GoogleWorkspaceClient:
             scopes=[SHEETS_SCOPE],
             allow_api_key=True,
             params=params,
+        )
+
+    def update_sheet_values(
+        self,
+        spreadsheet_id_or_url: str,
+        range_a1: str,
+        values: list[list[Any]],
+        *,
+        value_input_option: str,
+        major_dimension: str,
+        include_values_in_response: bool,
+    ) -> dict[str, Any]:
+        context = self.resolve_sheet_range_context(spreadsheet_id_or_url, range_a1=range_a1)
+        if not context["resolved_range_a1"]:
+            raise ValueError("Pass `range_a1` explicitly when writing Google Sheets values.")
+        spreadsheet_id = context["spreadsheet_id"]
+        active_properties = context["resolved_sheet_properties"] or context["default_sheet_properties"] or {}
+        column_count = active_properties.get("gridProperties", {}).get("columnCount")
+        max_column_a1 = (
+            column_to_a1(column_count - 1) if column_count and column_count > 0 else MAX_SHEET_COLUMN_A1
+        )
+        encoded_range = quote_range(
+            normalize_values_range(context["resolved_range_a1"], max_column_a1=max_column_a1)
+        )
+        return self._request(
+            "PUT",
+            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}",
+            scopes=[SHEETS_WRITE_SCOPE],
+            allow_api_key=False,
+            params={
+                "valueInputOption": value_input_option,
+                "includeValuesInResponse": str(include_values_in_response).lower(),
+                "responseValueRenderOption": "FORMATTED_VALUE",
+            },
+            json_body={
+                "majorDimension": major_dimension,
+                "values": values,
+            },
         )
 
 

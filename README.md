@@ -1,11 +1,13 @@
 # Google Workspace MCP
 
-Python MCP server for reading Google Docs, Google Sheets, and Google Chat with structured output and better image handling.
+Python MCP server for reading Google Docs, Google Sheets, and Google Chat with structured output, plus optional Google Sheets edit support when the token includes write scope.
 
 ## What It Does
 
 - Reads Google Docs as structured JSON with paragraphs, tables, inline objects, positioned objects, and image metadata.
 - Reads Google Sheets values, grid data, formulas, notes, hyperlinks, and chip runs.
+- Checks whether the current Google credentials can edit a specific Google Sheet via the API.
+- Updates Google Sheets cell ranges when the OAuth token or service account has `spreadsheets` write scope.
 - Lists Google Chat spaces, space members, and messages as structured JSON.
 - Preserves partial text styling in Sheets cells via `text_runs` and an `annotated_text` helper field for segments such as strikethrough and underline.
 - Extracts over-grid sheet images from `Drive export -> XLSX`.
@@ -88,6 +90,8 @@ Use `python -m google_workspace_mcp ...` everywhere below. If `google-workspace-
 - `python -m google_workspace_mcp`
 - `python -m google_workspace_mcp auth`
 - `python -m google_workspace_mcp auth login`
+- `python -m google_workspace_mcp auth login --scope-preset sheets-write`
+- `python -m google_workspace_mcp auth login --scope-preset readwrite`
 - `python -m google_workspace_mcp auth login --client-secrets C:\path\to\oauth-client-secret.json`
 - `python -m google_workspace_mcp auth login --client-id <client-id> --client-secret <client-secret>`
 - `python -m google_workspace_mcp auth login --token-file C:\path\to\oauth-token.json`
@@ -150,6 +154,14 @@ python -m google_workspace_mcp auth status
 ```
 
 If `auth status` shows only `drive.readonly`, Sheets URLs that include `gid` and `range` can still be read through the server's Drive export fallback. That fallback returns values-oriented output and omits formulas, notes, hyperlinks, and rich text metadata until you re-run `python -m google_workspace_mcp auth login` with `spreadsheets.readonly`.
+
+If you want to edit Google Sheets through the API, refresh the cached OAuth token with the Sheets write scope:
+
+```powershell
+python -m google_workspace_mcp auth login --scope-preset sheets-write
+```
+
+`--scope-preset readonly` keeps the old behavior, `--scope-preset sheets-write` adds Google Sheets edit scope while keeping the existing read scopes, and `--scope-preset readwrite` also upgrades Google Docs to write scope. You can still append more scopes with repeated `--scope ...` flags.
 
 If you need to overwrite the cached token with a specific client secret file and token path, you can also run:
 
@@ -336,6 +348,8 @@ If you installed the package directly from GitHub into an environment on your PA
 - `list_google_chat_memberships`
 - `read_sheet_values`
 - `read_sheet_grid`
+- `check_sheet_edit_access`
+- `update_sheet_values`
 - `get_sheet_row`
 - `search_sheet`
 - `sheet_to_json`
@@ -372,6 +386,29 @@ read_sheet_values(
 ```
 
 When the cached OAuth token has `drive.readonly` but not `spreadsheets.readonly`, this still succeeds by exporting the addressed tab/range as CSV behind the scenes. The response includes `source: "drive_export_csv_fallback"` and an `auth_warning` so callers know richer grid metadata is unavailable.
+
+### Check whether a sheet is editable through the API
+
+```text
+check_sheet_edit_access(
+  "https://docs.google.com/spreadsheets/d/<spreadsheet-id>/edit?gid=<gid>#gid=<gid>"
+)
+```
+
+This reports both:
+
+- whether the current token has `spreadsheets` write scope
+- whether Drive says the authenticated account can edit that file
+
+### Update a sheet range
+
+```text
+update_sheet_values(
+  "<spreadsheet-id>",
+  "<sheet-name>!A1:B2",
+  [["hello", "world"], ["next", "row"]]
+)
+```
 
 ### Read grid data with formulas, notes, and links
 

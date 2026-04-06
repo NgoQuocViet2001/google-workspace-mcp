@@ -477,6 +477,43 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertFalse(summary["oauth_token_capabilities"]["sheets_url_drive_export_fallback"])
         self.assertEqual(summary["active_auth_mode"], "oauth_client_cached_token")
 
+    def test_auth_summary_treats_sheets_write_scope_as_covering_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "scopes": [workspace.SHEETS_WRITE_SCOPE],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(Path(temp_dir) / "client-secret.json"),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(token_file),
+                }
+            )
+            summary = client.auth_summary()
+
+        self.assertEqual(
+            summary["oauth_token_missing_scopes"],
+            [
+                workspace.CHAT_MEMBERSHIPS_SCOPE,
+                workspace.CHAT_MESSAGES_SCOPE,
+                workspace.CHAT_SPACES_SCOPE,
+                workspace.DOCS_SCOPE,
+                workspace.DRIVE_SCOPE,
+            ],
+        )
+        self.assertTrue(summary["oauth_token_capabilities"]["sheets_readonly"])
+        self.assertTrue(summary["oauth_token_capabilities"]["sheets_write"])
+        self.assertIn(workspace.DOCS_WRITE_SCOPE, summary["oauth_token_missing_readwrite_scopes"])
+
     def test_auth_summary_reports_drive_export_fallback_when_only_drive_scope_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             token_file = Path(temp_dir) / "oauth-user-token.json"
@@ -823,6 +860,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
                     client_secret=None,
                     token_file=None,
                     scopes=None,
+                    scope_preset="readonly",
                     port=None,
                     no_browser=True,
                 )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch(
@@ -851,6 +889,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
             client_secret=None,
             token_file=None,
             scopes=None,
+            scope_preset="readonly",
             port=None,
             no_browser=True,
         )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch.object(
@@ -897,6 +936,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
                     client_secret="client-secret",
                     token_file=None,
                     scopes=None,
+                    scope_preset="readonly",
                     port=None,
                     no_browser=True,
                 )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch.object(
@@ -908,6 +948,41 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
                 login_mock.assert_called_once()
                 printed_payload = print_mock.call_args.args[0]
                 self.assertIn("oauth_client_secrets_file", printed_payload)
+
+    def test_cli_login_merges_scope_preset_with_extra_scopes(self) -> None:
+        client = self.make_client()
+        fake_result = {"oauth_token_file": "token.json", "notes": []}
+
+        with patch("google_workspace_mcp.cli.parse_args", return_value=Namespace(
+            command="auth",
+            action="login",
+            client_secrets=None,
+            client_id=None,
+            client_secret=None,
+            token_file=None,
+            scopes=["https://www.googleapis.com/auth/drive.metadata.readonly"],
+            scope_preset="sheets-write",
+            port=None,
+            no_browser=True,
+        )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch.object(
+            client,
+            "_oauth_client_is_configured",
+            return_value=True,
+        ), patch.object(
+            client,
+            "_resolved_oauth_client_secrets_file",
+            return_value=None,
+        ), patch.object(
+            client,
+            "run_oauth_login",
+            return_value=fake_result,
+        ) as login_mock, patch("google_workspace_mcp.cli.print"):
+            workspace.main([])
+
+        requested_scopes = login_mock.call_args.kwargs["scopes"]
+        self.assertIn(workspace.SHEETS_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.DOCS_SCOPE, requested_scopes)
+        self.assertIn("https://www.googleapis.com/auth/drive.metadata.readonly", requested_scopes)
 
     def test_run_oauth_logout_deletes_cached_token_file_and_revokes_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1007,6 +1082,78 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(resolved["source"], "sheets_metadata_fallback")
         self.assertEqual(resolved["name"], "Spec Workbook")
         self.assertIn("drive.readonly", resolved["auth_warning"])
+
+    def test_check_sheet_edit_access_reports_missing_write_scope_when_drive_says_editable(self) -> None:
+        client = self.make_client()
+        client.auth_summary = Mock(
+            return_value={
+                "oauth_token_scopes": [workspace.DRIVE_SCOPE],
+                "oauth_token_capabilities": {"drive_readonly": True, "sheets_write": False},
+            }
+        )
+        client._auth_headers = Mock(side_effect=RuntimeError("Cached OAuth token is missing required scopes."))
+        client.get_drive_file = Mock(
+            return_value={
+                "id": TEST_SPREADSHEET_ID,
+                "name": "BD_Promotion",
+                "webViewLink": "https://docs.google.com/spreadsheets/d/test/edit",
+                "owners": [{"displayName": "Chi Vu", "emailAddress": "chi.vu@sotatek.com"}],
+                "capabilities": {"canEdit": True, "canModifyContent": True},
+            }
+        )
+
+        with patch("google_workspace_mcp.tools.get_client", return_value=client):
+            result = workspace.check_sheet_edit_access(
+                "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOp/edit?gid=1544244212"
+            )
+
+        self.assertFalse(result["api_write_ready"])
+        self.assertTrue(result["drive_capabilities"]["can_edit"])
+        self.assertFalse(result["can_write_via_api"])
+        self.assertIn("scope-preset sheets-write", " ".join(result["notes"]))
+
+    def test_update_sheet_values_uses_write_scope_and_put_request(self) -> None:
+        client = self.make_client()
+        client.get_sheet_metadata = Mock(
+            return_value={
+                "sheets": [
+                    {
+                        "properties": {
+                            "sheetId": 1436003411,
+                            "title": "Feedback",
+                            "gridProperties": {"rowCount": 300, "columnCount": 17},
+                        }
+                    }
+                ]
+            }
+        )
+        client._request = Mock(return_value={"updatedRange": "'Feedback'!C119:D119", "updatedCells": 2})
+
+        payload = client.update_sheet_values(
+            "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOp/edit?gid=1436003411",
+            "C119:D119",
+            [["ok", "done"]],
+            value_input_option="RAW",
+            major_dimension="ROWS",
+            include_values_in_response=False,
+        )
+
+        self.assertEqual(payload["updatedCells"], 2)
+        client._request.assert_called_once_with(
+            "PUT",
+            "https://sheets.googleapis.com/v4/spreadsheets/1AbCdEfGhIjKlMnOp/values/%27Feedback%27!C119:D119",
+            scopes=[workspace.SHEETS_WRITE_SCOPE],
+            allow_api_key=False,
+            params={
+                "valueInputOption": "RAW",
+                "includeValuesInResponse": "false",
+                "responseValueRenderOption": "FORMATTED_VALUE",
+            },
+            json_body={
+                "majorDimension": "ROWS",
+                "values": [["ok", "done"]],
+            },
+        )
 
     def test_annotate_formatted_text_marks_strikethrough_and_underline_segments(self) -> None:
         annotated = workspace.annotate_formatted_text(

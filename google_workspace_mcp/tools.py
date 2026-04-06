@@ -12,6 +12,7 @@ from .client import get_client
 from .common import (
     SHEET_FORMULA_FIELDS,
     SHEET_GRID_FIELDS,
+    SHEETS_WRITE_SCOPE,
     XLSX_MIME,
     compact_dict,
     detect_google_file_kind,
@@ -467,6 +468,95 @@ def search_sheet(
                                 )
                             )
     return {"needle": needle, "match_count": len(matches), "matches": matches}
+
+
+@mcp.tool()
+def check_sheet_edit_access(spreadsheet_id_or_url: str) -> dict[str, Any]:
+    """Check whether the current credentials can edit a Google Sheet via the API."""
+    client = get_client()
+    auth_summary = client.auth_summary()
+    auth_error = None
+    try:
+        client._auth_headers([SHEETS_WRITE_SCOPE], allow_api_key=False)
+        api_write_ready = True
+    except RuntimeError as exc:
+        api_write_ready = False
+        auth_error = str(exc)
+
+    drive_metadata = None
+    drive_error = None
+    try:
+        drive_metadata = client.get_drive_file(spreadsheet_id_or_url, include_capabilities=True)
+    except RuntimeError as exc:
+        drive_error = str(exc)
+
+    capabilities = (drive_metadata or {}).get("capabilities", {})
+    can_edit = capabilities.get("canEdit")
+    can_modify_content = capabilities.get("canModifyContent")
+    can_write_via_api = api_write_ready and can_edit is not False and can_modify_content is not False
+    notes: list[str] = []
+    if auth_error:
+        notes.append(
+            "Current credentials are not ready for Sheets writes. "
+            "Refresh OAuth with `python -m google_workspace_mcp auth login --scope-preset sheets-write`."
+        )
+    if can_edit is False or can_modify_content is False:
+        notes.append("The authenticated Google account does not have editor access to this spreadsheet.")
+    if drive_error:
+        notes.append("Drive metadata could not confirm file-level edit capability.")
+
+    return compact_dict(
+        {
+            "spreadsheet_id": extract_file_id(spreadsheet_id_or_url, kind="sheet"),
+            "name": (drive_metadata or {}).get("name"),
+            "web_view_link": (drive_metadata or {}).get("webViewLink"),
+            "owners": (drive_metadata or {}).get("owners", []),
+            "api_write_ready": api_write_ready,
+            "api_write_error": auth_error,
+            "drive_capabilities": compact_dict(
+                {
+                    "can_edit": can_edit,
+                    "can_modify_content": can_modify_content,
+                }
+            ),
+            "drive_metadata_error": drive_error,
+            "oauth_token_scopes": auth_summary.get("oauth_token_scopes"),
+            "oauth_token_capabilities": auth_summary.get("oauth_token_capabilities"),
+            "can_write_via_api": can_write_via_api,
+            "notes": notes,
+        }
+    )
+
+
+@mcp.tool()
+def update_sheet_values(
+    spreadsheet_id_or_url: str,
+    range_a1: str,
+    values: list[list[Any]],
+    value_input_option: str = "USER_ENTERED",
+    major_dimension: str = "ROWS",
+    include_values_in_response: bool = True,
+) -> dict[str, Any]:
+    """Write a 2D array of values into a Google Sheet range."""
+    if not isinstance(values, list) or any(not isinstance(row, list) for row in values):
+        raise ValueError("Pass `values` as a 2D array such as [[\"A1\", \"B1\"], [\"A2\", \"B2\"]].")
+    client = get_client()
+    payload = client.update_sheet_values(
+        spreadsheet_id_or_url,
+        range_a1,
+        values,
+        value_input_option=value_input_option,
+        major_dimension=major_dimension,
+        include_values_in_response=include_values_in_response,
+    )
+    return {
+        "spreadsheet_id": extract_file_id(spreadsheet_id_or_url, kind="sheet"),
+        "updated_range": payload.get("updatedRange"),
+        "updated_rows": payload.get("updatedRows"),
+        "updated_columns": payload.get("updatedColumns"),
+        "updated_cells": payload.get("updatedCells"),
+        "updated_data": payload.get("updatedData"),
+    }
 
 
 @mcp.tool()

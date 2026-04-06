@@ -9,8 +9,10 @@ from urllib.parse import parse_qsl, quote, urlparse
 
 
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
+DOCS_WRITE_SCOPE = "https://www.googleapis.com/auth/documents"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
 CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
 CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
@@ -23,6 +25,37 @@ DEFAULT_READONLY_SCOPES = [
     CHAT_MESSAGES_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
 ]
+DEFAULT_SHEETS_WRITE_SCOPES = [
+    DOCS_SCOPE,
+    DRIVE_SCOPE,
+    SHEETS_WRITE_SCOPE,
+    CHAT_SPACES_SCOPE,
+    CHAT_MESSAGES_SCOPE,
+    CHAT_MEMBERSHIPS_SCOPE,
+]
+DEFAULT_READWRITE_SCOPES = [
+    DOCS_WRITE_SCOPE,
+    DRIVE_SCOPE,
+    SHEETS_WRITE_SCOPE,
+    CHAT_SPACES_SCOPE,
+    CHAT_MESSAGES_SCOPE,
+    CHAT_MEMBERSHIPS_SCOPE,
+]
+AUTH_SCOPE_PRESETS = {
+    "readonly": DEFAULT_READONLY_SCOPES,
+    "sheets-write": DEFAULT_SHEETS_WRITE_SCOPES,
+    "readwrite": DEFAULT_READWRITE_SCOPES,
+}
+SCOPE_EQUIVALENTS = {
+    DOCS_SCOPE: (DOCS_SCOPE, DOCS_WRITE_SCOPE),
+    DOCS_WRITE_SCOPE: (DOCS_WRITE_SCOPE,),
+    DRIVE_SCOPE: (DRIVE_SCOPE,),
+    SHEETS_SCOPE: (SHEETS_SCOPE, SHEETS_WRITE_SCOPE),
+    SHEETS_WRITE_SCOPE: (SHEETS_WRITE_SCOPE,),
+    CHAT_SPACES_SCOPE: (CHAT_SPACES_SCOPE,),
+    CHAT_MESSAGES_SCOPE: (CHAT_MESSAGES_SCOPE,),
+    CHAT_MEMBERSHIPS_SCOPE: (CHAT_MEMBERSHIPS_SCOPE,),
+}
 
 DOC_URL_RE = re.compile(r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")
 SHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)")
@@ -120,6 +153,24 @@ def normalize_scopes(raw_scopes: Any) -> list[str]:
     if isinstance(raw_scopes, (list, tuple, set)):
         return sorted({str(scope).strip() for scope in raw_scopes if str(scope).strip()})
     return []
+
+
+def merge_scopes(*scope_groups: Any) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for scope_group in scope_groups:
+        for scope in normalize_scopes(scope_group):
+            if scope in seen:
+                continue
+            seen.add(scope)
+            merged.append(scope)
+    return merged
+
+
+def scope_is_satisfied(granted_scopes: Any, required_scope: str) -> bool:
+    granted = set(normalize_scopes(granted_scopes))
+    accepted_scopes = SCOPE_EQUIVALENTS.get(required_scope, (required_scope,))
+    return any(scope in granted for scope in accepted_scopes)
 
 
 def extract_file_id(value: str, kind: str | None = None) -> str:
