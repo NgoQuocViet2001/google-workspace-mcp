@@ -16,14 +16,19 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .common import (
+    CHAT_MEMBERSHIPS_WRITE_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_MESSAGES_WRITE_SCOPE,
     CHAT_MESSAGES_SCOPE,
+    CHAT_SPACES_WRITE_SCOPE,
     CHAT_SPACES_SCOPE,
+    DEFAULT_ALL_WRITE_SCOPES,
     DEFAULT_READONLY_SCOPES,
     DEFAULT_READWRITE_SCOPES,
     DOCS_SCOPE,
     DOCS_WRITE_SCOPE,
     DRIVE_SCOPE,
+    DRIVE_WRITE_SCOPE,
     MAX_SHEET_COLUMN_A1,
     SHEETS_SCOPE,
     SHEETS_WRITE_SCOPE,
@@ -297,13 +302,17 @@ class GoogleWorkspaceClient:
         cached_scopes = self._cached_oauth_token_scopes()
         return {
             "drive_readonly": scope_is_satisfied(cached_scopes, DRIVE_SCOPE),
+            "drive_write": scope_is_satisfied(cached_scopes, DRIVE_WRITE_SCOPE),
             "docs_readonly": scope_is_satisfied(cached_scopes, DOCS_SCOPE),
             "docs_write": scope_is_satisfied(cached_scopes, DOCS_WRITE_SCOPE),
             "sheets_readonly": scope_is_satisfied(cached_scopes, SHEETS_SCOPE),
             "sheets_write": scope_is_satisfied(cached_scopes, SHEETS_WRITE_SCOPE),
             "chat_spaces_readonly": scope_is_satisfied(cached_scopes, CHAT_SPACES_SCOPE),
+            "chat_spaces_write": scope_is_satisfied(cached_scopes, CHAT_SPACES_WRITE_SCOPE),
             "chat_messages_readonly": scope_is_satisfied(cached_scopes, CHAT_MESSAGES_SCOPE),
+            "chat_messages_write": scope_is_satisfied(cached_scopes, CHAT_MESSAGES_WRITE_SCOPE),
             "chat_memberships_readonly": scope_is_satisfied(cached_scopes, CHAT_MEMBERSHIPS_SCOPE),
+            "chat_memberships_write": scope_is_satisfied(cached_scopes, CHAT_MEMBERSHIPS_WRITE_SCOPE),
             "sheets_url_drive_export_fallback": scope_is_satisfied(cached_scopes, DRIVE_SCOPE)
             and not scope_is_satisfied(cached_scopes, SHEETS_SCOPE),
         }
@@ -330,6 +339,18 @@ class GoogleWorkspaceClient:
             notes.append(
                 "Google Sheets edits require spreadsheets write scope. Re-run "
                 "`google-workspace-mcp auth login --scope-preset sheets-write` to refresh the cached token."
+            )
+        if not (
+            cached_oauth_capabilities["docs_write"]
+            and cached_oauth_capabilities["drive_write"]
+            and cached_oauth_capabilities["sheets_write"]
+            and cached_oauth_capabilities["chat_spaces_write"]
+            and cached_oauth_capabilities["chat_messages_write"]
+            and cached_oauth_capabilities["chat_memberships_write"]
+        ):
+            notes.append(
+                "If you want broad read/write scopes across Docs, Drive, Sheets, and Google Chat, re-run "
+                "`google-workspace-mcp auth login --scope-preset all-write`."
             )
         return notes
 
@@ -372,6 +393,7 @@ class GoogleWorkspaceClient:
             "oauth_token_scopes": cached_oauth_scopes,
             "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_READONLY_SCOPES),
             "oauth_token_missing_readwrite_scopes": self._missing_cached_oauth_scopes(DEFAULT_READWRITE_SCOPES),
+            "oauth_token_missing_all_write_scopes": self._missing_cached_oauth_scopes(DEFAULT_ALL_WRITE_SCOPES),
             "oauth_token_capabilities": cached_oauth_capabilities,
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,

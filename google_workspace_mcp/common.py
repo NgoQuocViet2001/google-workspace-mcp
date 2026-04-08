@@ -11,11 +11,15 @@ from urllib.parse import parse_qsl, quote, urlparse
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
 DOCS_WRITE_SCOPE = "https://www.googleapis.com/auth/documents"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_WRITE_SCOPE = "https://www.googleapis.com/auth/drive"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
+CHAT_SPACES_WRITE_SCOPE = "https://www.googleapis.com/auth/chat.spaces"
 CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
+CHAT_MESSAGES_WRITE_SCOPE = "https://www.googleapis.com/auth/chat.messages"
 CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
+CHAT_MEMBERSHIPS_WRITE_SCOPE = "https://www.googleapis.com/auth/chat.memberships"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DEFAULT_READONLY_SCOPES = [
     DOCS_SCOPE,
@@ -41,20 +45,33 @@ DEFAULT_READWRITE_SCOPES = [
     CHAT_MESSAGES_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
 ]
+DEFAULT_ALL_WRITE_SCOPES = [
+    DOCS_WRITE_SCOPE,
+    DRIVE_WRITE_SCOPE,
+    SHEETS_WRITE_SCOPE,
+    CHAT_SPACES_WRITE_SCOPE,
+    CHAT_MESSAGES_WRITE_SCOPE,
+    CHAT_MEMBERSHIPS_WRITE_SCOPE,
+]
 AUTH_SCOPE_PRESETS = {
     "readonly": DEFAULT_READONLY_SCOPES,
     "sheets-write": DEFAULT_SHEETS_WRITE_SCOPES,
     "readwrite": DEFAULT_READWRITE_SCOPES,
+    "all-write": DEFAULT_ALL_WRITE_SCOPES,
 }
 SCOPE_EQUIVALENTS = {
     DOCS_SCOPE: (DOCS_SCOPE, DOCS_WRITE_SCOPE),
     DOCS_WRITE_SCOPE: (DOCS_WRITE_SCOPE,),
-    DRIVE_SCOPE: (DRIVE_SCOPE,),
+    DRIVE_SCOPE: (DRIVE_SCOPE, DRIVE_WRITE_SCOPE),
+    DRIVE_WRITE_SCOPE: (DRIVE_WRITE_SCOPE,),
     SHEETS_SCOPE: (SHEETS_SCOPE, SHEETS_WRITE_SCOPE),
     SHEETS_WRITE_SCOPE: (SHEETS_WRITE_SCOPE,),
-    CHAT_SPACES_SCOPE: (CHAT_SPACES_SCOPE,),
-    CHAT_MESSAGES_SCOPE: (CHAT_MESSAGES_SCOPE,),
-    CHAT_MEMBERSHIPS_SCOPE: (CHAT_MEMBERSHIPS_SCOPE,),
+    CHAT_SPACES_SCOPE: (CHAT_SPACES_SCOPE, CHAT_SPACES_WRITE_SCOPE),
+    CHAT_SPACES_WRITE_SCOPE: (CHAT_SPACES_WRITE_SCOPE,),
+    CHAT_MESSAGES_SCOPE: (CHAT_MESSAGES_SCOPE, CHAT_MESSAGES_WRITE_SCOPE),
+    CHAT_MESSAGES_WRITE_SCOPE: (CHAT_MESSAGES_WRITE_SCOPE,),
+    CHAT_MEMBERSHIPS_SCOPE: (CHAT_MEMBERSHIPS_SCOPE, CHAT_MEMBERSHIPS_WRITE_SCOPE),
+    CHAT_MEMBERSHIPS_WRITE_SCOPE: (CHAT_MEMBERSHIPS_WRITE_SCOPE,),
 }
 
 DOC_URL_RE = re.compile(r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")

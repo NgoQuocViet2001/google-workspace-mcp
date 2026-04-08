@@ -60,7 +60,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Named scope bundle to request. "
             "`readonly` keeps the existing read-only behavior, `sheets-write` adds Sheets edit scope, "
-            "and `readwrite` also upgrades Google Docs to write scope."
+            "`readwrite` also upgrades Google Docs to write scope, and `all-write` requests broad user write scopes "
+            "across Docs, Drive, Sheets, and Google Chat."
         ),
     )
     auth_parser.add_argument(

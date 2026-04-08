@@ -513,6 +513,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertTrue(summary["oauth_token_capabilities"]["sheets_readonly"])
         self.assertTrue(summary["oauth_token_capabilities"]["sheets_write"])
         self.assertIn(workspace.DOCS_WRITE_SCOPE, summary["oauth_token_missing_readwrite_scopes"])
+        self.assertIn(workspace.DRIVE_WRITE_SCOPE, summary["oauth_token_missing_all_write_scopes"])
 
     def test_auth_summary_reports_drive_export_fallback_when_only_drive_scope_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -543,6 +544,48 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertTrue(summary["oauth_token_capabilities"]["sheets_url_drive_export_fallback"])
         self.assertIn("gid/range", " ".join(summary["notes"]))
         self.assertIn("documents.readonly", " ".join(summary["notes"]))
+
+    def test_auth_summary_treats_broader_write_scopes_as_read_capable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "scopes": [
+                            workspace.DOCS_WRITE_SCOPE,
+                            workspace.DRIVE_WRITE_SCOPE,
+                            workspace.SHEETS_WRITE_SCOPE,
+                            workspace.CHAT_SPACES_WRITE_SCOPE,
+                            workspace.CHAT_MESSAGES_WRITE_SCOPE,
+                            workspace.CHAT_MEMBERSHIPS_WRITE_SCOPE,
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(Path(temp_dir) / "client-secret.json"),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(token_file),
+                }
+            )
+            summary = client.auth_summary()
+
+        self.assertEqual(summary["oauth_token_missing_scopes"], [])
+        self.assertEqual(summary["oauth_token_missing_readwrite_scopes"], [])
+        self.assertEqual(summary["oauth_token_missing_all_write_scopes"], [])
+        self.assertTrue(summary["oauth_token_capabilities"]["drive_readonly"])
+        self.assertTrue(summary["oauth_token_capabilities"]["drive_write"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_spaces_readonly"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_spaces_write"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_messages_readonly"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_messages_write"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_memberships_readonly"])
+        self.assertTrue(summary["oauth_token_capabilities"]["chat_memberships_write"])
 
     def test_auth_summary_marks_missing_oauth_client_secret_file_as_not_configured(self) -> None:
         client = self.make_client(
@@ -983,6 +1026,44 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertIn(workspace.SHEETS_WRITE_SCOPE, requested_scopes)
         self.assertIn(workspace.DOCS_SCOPE, requested_scopes)
         self.assertIn("https://www.googleapis.com/auth/drive.metadata.readonly", requested_scopes)
+
+    def test_cli_login_all_write_preset_requests_chat_drive_and_workspace_write_scopes(self) -> None:
+        client = self.make_client()
+        fake_result = {"oauth_token_file": "token.json", "notes": []}
+
+        with patch("google_workspace_mcp.cli.parse_args", return_value=Namespace(
+            command="auth",
+            action="login",
+            client_secrets=None,
+            client_id=None,
+            client_secret=None,
+            token_file=None,
+            scopes=None,
+            scope_preset="all-write",
+            port=None,
+            no_browser=True,
+        )), patch("google_workspace_mcp.cli.get_client", return_value=client), patch.object(
+            client,
+            "_oauth_client_is_configured",
+            return_value=True,
+        ), patch.object(
+            client,
+            "_resolved_oauth_client_secrets_file",
+            return_value=None,
+        ), patch.object(
+            client,
+            "run_oauth_login",
+            return_value=fake_result,
+        ) as login_mock, patch("google_workspace_mcp.cli.print"):
+            workspace.main([])
+
+        requested_scopes = login_mock.call_args.kwargs["scopes"]
+        self.assertIn(workspace.DOCS_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.DRIVE_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.SHEETS_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.CHAT_SPACES_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.CHAT_MESSAGES_WRITE_SCOPE, requested_scopes)
+        self.assertIn(workspace.CHAT_MEMBERSHIPS_WRITE_SCOPE, requested_scopes)
 
     def test_run_oauth_logout_deletes_cached_token_file_and_revokes_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

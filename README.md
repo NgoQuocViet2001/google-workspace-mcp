@@ -92,6 +92,7 @@ Use `python -m google_workspace_mcp ...` everywhere below. If `google-workspace-
 - `python -m google_workspace_mcp auth login`
 - `python -m google_workspace_mcp auth login --scope-preset sheets-write`
 - `python -m google_workspace_mcp auth login --scope-preset readwrite`
+- `python -m google_workspace_mcp auth login --scope-preset all-write`
 - `python -m google_workspace_mcp auth login --client-secrets C:\path\to\oauth-client-secret.json`
 - `python -m google_workspace_mcp auth login --client-id <client-id> --client-secret <client-secret>`
 - `python -m google_workspace_mcp auth login --token-file C:\path\to\oauth-token.json`
@@ -161,7 +162,7 @@ If you want to edit Google Sheets through the API, refresh the cached OAuth toke
 python -m google_workspace_mcp auth login --scope-preset sheets-write
 ```
 
-`--scope-preset readonly` keeps the old behavior, `--scope-preset sheets-write` adds Google Sheets edit scope while keeping the existing read scopes, and `--scope-preset readwrite` also upgrades Google Docs to write scope. You can still append more scopes with repeated `--scope ...` flags.
+`--scope-preset readonly` keeps the old behavior, `--scope-preset sheets-write` adds Google Sheets edit scope while keeping the existing read scopes, `--scope-preset readwrite` also upgrades Google Docs to write scope, and `--scope-preset all-write` requests broad user write scopes across Docs, Drive, Sheets, and Google Chat. You can still append more scopes with repeated `--scope ...` flags.
 
 If you need to overwrite the cached token with a specific client secret file and token path, you can also run:
 
@@ -261,20 +262,19 @@ google-workspace-mcp
 ## Running the Server
 
 ```powershell
-cd <path-to-repo>
-.venv\Scripts\python.exe mcp_google_workspace.py
+python -m google_workspace_mcp
 ```
 
-Or, if you installed it directly from GitHub:
+If you want to install straight from a local clone instead of pointing Codex at the repo checkout, run:
 
 ```powershell
-python -m google_workspace_mcp
+python -m pip install --upgrade <path-to-repo>
 ```
 
 To bootstrap OAuth for a private user account:
 
 ```powershell
-python -m google_workspace_mcp auth
+python -m google_workspace_mcp auth login --scope-preset all-write
 ```
 
 If your `google-workspace-mcp` launcher is already available on `PATH`, the equivalent shorter command is:
@@ -301,8 +301,8 @@ python -m google_workspace_mcp auth logout
 {
   "mcpServers": {
     "google-workspace": {
-      "command": "<path-to-repo>/.venv/Scripts/python.exe",
-      "args": ["<path-to-repo>/mcp_google_workspace.py"],
+      "command": "python",
+      "args": ["-m", "google_workspace_mcp"],
       "env": {
         "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": "C:/path/to/oauth-client-secret.json",
         "GOOGLE_OAUTH_TOKEN_FILE": "C:/path/to/oauth-token.json"
@@ -320,7 +320,7 @@ For public Sheets only, replace the `env` block with:
 }
 ```
 
-If you installed the package directly from GitHub into an environment on your PATH, you can also use:
+If you prefer the console-script entrypoint after `pip install`, you can also use:
 
 ```json
 {
