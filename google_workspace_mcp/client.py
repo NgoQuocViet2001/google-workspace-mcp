@@ -22,10 +22,13 @@ from .common import (
     CHAT_MESSAGES_SCOPE,
     CHAT_SPACES_READ_SCOPE,
     CHAT_SPACES_SCOPE,
-    DEFAULT_READONLY_SCOPES,
+    DEFAULT_OAUTH_SCOPES,
+    DOCS_READ_SCOPE,
     DOCS_SCOPE,
     DRIVE_SCOPE,
     MAX_SHEET_COLUMN_A1,
+    READONLY_SCOPE_UPGRADES,
+    SHEETS_READ_SCOPE,
     SHEETS_SCOPE,
     column_to_a1,
     default_oauth_client_secrets_file,
@@ -288,24 +291,51 @@ class GoogleWorkspaceClient:
 
     def _missing_cached_oauth_scopes(self, required_scopes: Iterable[str]) -> list[str]:
         cached_scopes = set(self._cached_oauth_token_scopes())
-        return [scope for scope in sorted(set(required_scopes)) if scope not in cached_scopes]
+        return [
+            scope
+            for scope in sorted(set(required_scopes))
+            if not self._cached_scope_satisfies_requirement(cached_scopes, scope)
+        ]
+
+    def _cached_scope_satisfies_requirement(self, cached_scopes: set[str], required_scope: str) -> bool:
+        if required_scope in cached_scopes:
+            return True
+        upgraded_scope = READONLY_SCOPE_UPGRADES.get(required_scope)
+        return bool(upgraded_scope and upgraded_scope in cached_scopes)
+
+    def _resolved_cached_oauth_scopes(self, required_scopes: Iterable[str]) -> tuple[str, ...]:
+        cached_scopes = set(self._cached_oauth_token_scopes())
+        resolved_scopes: list[str] = []
+        for scope in sorted(set(required_scopes)):
+            if scope in cached_scopes:
+                resolved_scopes.append(scope)
+                continue
+            upgraded_scope = READONLY_SCOPE_UPGRADES.get(scope)
+            if upgraded_scope and upgraded_scope in cached_scopes:
+                resolved_scopes.append(upgraded_scope)
+                continue
+            resolved_scopes.append(scope)
+        return tuple(sorted(set(resolved_scopes)))
 
     def _cached_oauth_capabilities(self) -> dict[str, bool]:
         cached_scopes = set(self._cached_oauth_token_scopes())
+        docs_full = DOCS_SCOPE in cached_scopes
+        sheets_full = SHEETS_SCOPE in cached_scopes
         chat_spaces_full = CHAT_SPACES_SCOPE in cached_scopes
         chat_messages_full = CHAT_MESSAGES_SCOPE in cached_scopes
         chat_memberships_full = CHAT_MEMBERSHIPS_SCOPE in cached_scopes
         return {
             "drive_readonly": DRIVE_SCOPE in cached_scopes,
-            "docs_readonly": DOCS_SCOPE in cached_scopes,
-            "sheets_readonly": SHEETS_SCOPE in cached_scopes,
+            "docs_readonly": docs_full or DOCS_READ_SCOPE in cached_scopes,
+            "sheets_readonly": sheets_full or SHEETS_READ_SCOPE in cached_scopes,
             "chat_spaces": chat_spaces_full,
             "chat_messages": chat_messages_full,
             "chat_memberships": chat_memberships_full,
             "chat_spaces_readonly": chat_spaces_full or CHAT_SPACES_READ_SCOPE in cached_scopes,
             "chat_messages_readonly": chat_messages_full or CHAT_MESSAGES_READ_SCOPE in cached_scopes,
             "chat_memberships_readonly": chat_memberships_full or CHAT_MEMBERSHIPS_READ_SCOPE in cached_scopes,
-            "sheets_url_drive_export_fallback": DRIVE_SCOPE in cached_scopes and SHEETS_SCOPE not in cached_scopes,
+            "sheets_url_drive_export_fallback": DRIVE_SCOPE in cached_scopes
+            and not self._cached_scope_satisfies_requirement(cached_scopes, SHEETS_READ_SCOPE),
         }
 
     def _auth_summary_notes(self, cached_oauth_capabilities: dict[str, bool]) -> list[str]:
@@ -318,11 +348,15 @@ class GoogleWorkspaceClient:
         if cached_oauth_capabilities["sheets_url_drive_export_fallback"]:
             notes.append(
                 "This cached token can still read Google Sheets URLs that include gid/range via Drive export fallback. "
-                "Expect values-only output until you re-run `google-workspace-mcp auth login` with the full `https://www.googleapis.com/auth/spreadsheets` scope."
+                "Expect values-only output until you re-run `google-workspace-mcp auth login` with "
+                "`https://www.googleapis.com/auth/spreadsheets.readonly` or the full "
+                "`https://www.googleapis.com/auth/spreadsheets` scope."
             )
         if cached_oauth_capabilities["drive_readonly"] and not cached_oauth_capabilities["docs_readonly"]:
             notes.append(
-                "drive.readonly does not unlock Google Docs content reads. Google Docs still require the full `https://www.googleapis.com/auth/documents` scope."
+                "drive.readonly does not unlock Google Docs content reads. Google Docs still require "
+                "`https://www.googleapis.com/auth/documents.readonly` or the full "
+                "`https://www.googleapis.com/auth/documents` scope."
             )
         if cached_oauth_capabilities["chat_messages_readonly"] and not cached_oauth_capabilities["chat_messages"]:
             notes.append(
@@ -368,7 +402,7 @@ class GoogleWorkspaceClient:
             "oauth_token_cached": self.oauth_token_file.exists(),
             "oauth_token_format": self._cached_oauth_token_format(),
             "oauth_token_scopes": cached_oauth_scopes,
-            "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_READONLY_SCOPES),
+            "oauth_token_missing_scopes": self._missing_cached_oauth_scopes(DEFAULT_OAUTH_SCOPES),
             "oauth_token_capabilities": cached_oauth_capabilities,
             "service_account_configured": service_account_ready,
             "service_account_source": service_account_source,
@@ -566,7 +600,7 @@ class GoogleWorkspaceClient:
         open_browser: bool | None = None,
         port: int | None = None,
     ) -> dict[str, Any]:
-        requested_scopes = list(scopes or DEFAULT_READONLY_SCOPES)
+        requested_scopes = list(scopes or DEFAULT_OAUTH_SCOPES)
         resolved_oauth_client_secrets_file = self._resolved_oauth_client_secrets_file()
         bundled_oauth_client_config = self._bundled_oauth_client_config_json()
         flow = self._oauth_flow(requested_scopes)
@@ -739,7 +773,8 @@ class GoogleWorkspaceClient:
 
     def _user_oauth_credentials(self, scopes: Iterable[str]) -> UserOAuthCredentials:
         scope_list = tuple(sorted(set(scopes)))
-        credentials = self._user_credentials.get(scope_list)
+        resolved_scope_list = self._resolved_cached_oauth_scopes(scope_list)
+        credentials = self._user_credentials.get(resolved_scope_list)
         if credentials is not None and credentials.valid and credentials.token:
             return credentials
 
@@ -760,7 +795,7 @@ class GoogleWorkspaceClient:
         try:
             credentials = UserOAuthCredentials.from_authorized_user_file(
                 str(self.oauth_token_file),
-                list(scope_list),
+                list(resolved_scope_list),
             )
         except ValueError as exc:
             raise RuntimeError(
@@ -777,7 +812,7 @@ class GoogleWorkspaceClient:
                 "The cached OAuth token is invalid or missing. Run `google-workspace-mcp auth` again."
             )
 
-        self._user_credentials[scope_list] = credentials
+        self._user_credentials[resolved_scope_list] = credentials
         return credentials
 
     def _auth_headers(self, scopes: Iterable[str], allow_api_key: bool) -> tuple[dict[str, str], dict[str, str]]:
@@ -922,7 +957,7 @@ class GoogleWorkspaceClient:
         metadata = self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}",
-            scopes=[SHEETS_SCOPE],
+            scopes=[SHEETS_READ_SCOPE],
             allow_api_key=True,
             params={
                 "fields": "spreadsheetId,properties.title,sheets.properties.sheetId,"
@@ -987,7 +1022,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://docs.googleapis.com/v1/documents/{document_id}",
-            scopes=[DOCS_SCOPE],
+            scopes=[DOCS_READ_SCOPE],
             allow_api_key=False,
             params={"includeTabsContent": "true"},
         )
@@ -1007,7 +1042,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             "https://chat.googleapis.com/v1/spaces",
-            scopes=[CHAT_SPACES_SCOPE],
+            scopes=[CHAT_SPACES_READ_SCOPE],
             allow_api_key=False,
             params=params,
         )
@@ -1017,7 +1052,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://chat.googleapis.com/v1/{space_name}",
-            scopes=[CHAT_SPACES_SCOPE],
+            scopes=[CHAT_SPACES_READ_SCOPE],
             allow_api_key=False,
         )
 
@@ -1026,7 +1061,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://chat.googleapis.com/v1/{message_name}",
-            scopes=[CHAT_MESSAGES_SCOPE],
+            scopes=[CHAT_MESSAGES_READ_SCOPE],
             allow_api_key=False,
         )
 
@@ -1054,7 +1089,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://chat.googleapis.com/v1/{space_name}/messages",
-            scopes=[CHAT_MESSAGES_SCOPE],
+            scopes=[CHAT_MESSAGES_READ_SCOPE],
             allow_api_key=False,
             params=params,
         )
@@ -1103,7 +1138,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://chat.googleapis.com/v1/{space_name}/members",
-            scopes=[CHAT_MEMBERSHIPS_SCOPE],
+            scopes=[CHAT_MEMBERSHIPS_READ_SCOPE],
             allow_api_key=False,
             params=params,
         )
@@ -1133,7 +1168,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}",
-            scopes=[SHEETS_SCOPE],
+            scopes=[SHEETS_READ_SCOPE],
             allow_api_key=True,
             params={
                 "majorDimension": major_dimension,
@@ -1168,7 +1203,7 @@ class GoogleWorkspaceClient:
         return self._request(
             "GET",
             f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}",
-            scopes=[SHEETS_SCOPE],
+            scopes=[SHEETS_READ_SCOPE],
             allow_api_key=True,
             params=params,
         )

@@ -12,6 +12,8 @@ from .client import get_client
 from .common import (
     SHEET_FORMULA_FIELDS,
     SHEET_GRID_FIELDS,
+    SHEETS_READ_SCOPE,
+    SHEETS_SCOPE,
     XLSX_MIME,
     compact_dict,
     detect_google_file_kind,
@@ -78,7 +80,8 @@ def _drive_export_csv_fallback(
         "rows": rows,
         "values": values_from_csv_rows(rows, major_dimension=major_dimension),
         "auth_warning": (
-            "Cached OAuth token is missing the full `https://www.googleapis.com/auth/spreadsheets` scope, so this response came from "
+            "Cached OAuth token is missing Google Sheets API read scope "
+            f"(`{SHEETS_READ_SCOPE}` or `{SHEETS_SCOPE}`), so this response came from "
             "Drive export fallback. Formulas, notes, hyperlinks, and rich text metadata may be omitted."
         ),
         "source": "drive_export_csv_fallback",
