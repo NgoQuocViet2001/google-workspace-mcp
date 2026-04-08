@@ -16,8 +16,11 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .common import (
+    CHAT_MEMBERSHIPS_READ_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
+    CHAT_MESSAGES_READ_SCOPE,
     CHAT_MESSAGES_SCOPE,
+    CHAT_SPACES_READ_SCOPE,
     CHAT_SPACES_SCOPE,
     DEFAULT_READONLY_SCOPES,
     DOCS_SCOPE,
@@ -289,13 +292,19 @@ class GoogleWorkspaceClient:
 
     def _cached_oauth_capabilities(self) -> dict[str, bool]:
         cached_scopes = set(self._cached_oauth_token_scopes())
+        chat_spaces_full = CHAT_SPACES_SCOPE in cached_scopes
+        chat_messages_full = CHAT_MESSAGES_SCOPE in cached_scopes
+        chat_memberships_full = CHAT_MEMBERSHIPS_SCOPE in cached_scopes
         return {
             "drive_readonly": DRIVE_SCOPE in cached_scopes,
             "docs_readonly": DOCS_SCOPE in cached_scopes,
             "sheets_readonly": SHEETS_SCOPE in cached_scopes,
-            "chat_spaces_readonly": CHAT_SPACES_SCOPE in cached_scopes,
-            "chat_messages_readonly": CHAT_MESSAGES_SCOPE in cached_scopes,
-            "chat_memberships_readonly": CHAT_MEMBERSHIPS_SCOPE in cached_scopes,
+            "chat_spaces": chat_spaces_full,
+            "chat_messages": chat_messages_full,
+            "chat_memberships": chat_memberships_full,
+            "chat_spaces_readonly": chat_spaces_full or CHAT_SPACES_READ_SCOPE in cached_scopes,
+            "chat_messages_readonly": chat_messages_full or CHAT_MESSAGES_READ_SCOPE in cached_scopes,
+            "chat_memberships_readonly": chat_memberships_full or CHAT_MEMBERSHIPS_READ_SCOPE in cached_scopes,
             "sheets_url_drive_export_fallback": DRIVE_SCOPE in cached_scopes and SHEETS_SCOPE not in cached_scopes,
         }
 
@@ -303,19 +312,22 @@ class GoogleWorkspaceClient:
         notes = [
             "Public Sheets can be read with GOOGLE_API_KEY.",
             "OAuth desktop client credentials can read private files shared to your Google account.",
-            "Docs, Drive, and Google Chat reads are most reliable with OAuth user credentials or an OAuth access token.",
+            "Docs, Sheets, Drive, and Google Chat access is most reliable with OAuth user credentials or an OAuth access token.",
             "A service account must be granted access to private files or shared drives.",
         ]
         if cached_oauth_capabilities["sheets_url_drive_export_fallback"]:
             notes.append(
                 "This cached token can still read Google Sheets URLs that include gid/range via Drive export fallback. "
-                "Expect values-only output until you re-run `google-workspace-mcp auth login` with "
-                "spreadsheets.readonly."
+                "Expect values-only output until you re-run `google-workspace-mcp auth login` with the full `https://www.googleapis.com/auth/spreadsheets` scope."
             )
         if cached_oauth_capabilities["drive_readonly"] and not cached_oauth_capabilities["docs_readonly"]:
             notes.append(
-                "drive.readonly does not unlock Google Docs content reads. Google Docs still require "
-                "documents.readonly."
+                "drive.readonly does not unlock Google Docs content reads. Google Docs still require the full `https://www.googleapis.com/auth/documents` scope."
+            )
+        if cached_oauth_capabilities["chat_messages_readonly"] and not cached_oauth_capabilities["chat_messages"]:
+            notes.append(
+                "Google Chat access is currently read-only. Re-run `google-workspace-mcp auth login` to grant the full "
+                "`https://www.googleapis.com/auth/chat.messages` scope for write operations."
             )
         return notes
 

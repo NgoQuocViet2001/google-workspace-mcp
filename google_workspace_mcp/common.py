@@ -8,14 +8,17 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlparse
 
 
-DOCS_SCOPE = "https://www.googleapis.com/auth/documents.readonly"
+DOCS_SCOPE = "https://www.googleapis.com/auth/documents"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
-SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
-CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
-CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
-CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+CHAT_SPACES_READ_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly"
+CHAT_MESSAGES_READ_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly"
+CHAT_MEMBERSHIPS_READ_SCOPE = "https://www.googleapis.com/auth/chat.memberships.readonly"
+CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces"
+CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages"
+CHAT_MEMBERSHIPS_SCOPE = "https://www.googleapis.com/auth/chat.memberships"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-DEFAULT_READONLY_SCOPES = [
+DEFAULT_OAUTH_SCOPES = [
     DOCS_SCOPE,
     DRIVE_SCOPE,
     SHEETS_SCOPE,
@@ -23,6 +26,8 @@ DEFAULT_READONLY_SCOPES = [
     CHAT_MESSAGES_SCOPE,
     CHAT_MEMBERSHIPS_SCOPE,
 ]
+# Backward-compatible alias used by the CLI and auth summary.
+DEFAULT_READONLY_SCOPES = DEFAULT_OAUTH_SCOPES
 
 DOC_URL_RE = re.compile(r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")
 SHEET_URL_RE = re.compile(r"https?://docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)")

@@ -38,7 +38,7 @@ from .sheets import (
 
 
 def _is_missing_sheets_scope_error(exc: RuntimeError) -> bool:
-    return "spreadsheets.readonly" in str(exc).lower()
+    return "spreadsheets" in str(exc).lower()
 
 
 def _range_sheet_name(range_a1: str | None) -> str | None:
@@ -78,7 +78,7 @@ def _drive_export_csv_fallback(
         "rows": rows,
         "values": values_from_csv_rows(rows, major_dimension=major_dimension),
         "auth_warning": (
-            "Cached OAuth token is missing spreadsheets.readonly, so this response came from "
+            "Cached OAuth token is missing the full `https://www.googleapis.com/auth/spreadsheets` scope, so this response came from "
             "Drive export fallback. Formulas, notes, hyperlinks, and rich text metadata may be omitted."
         ),
         "source": "drive_export_csv_fallback",
