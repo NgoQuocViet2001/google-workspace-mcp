@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .client import GoogleWorkspaceClient, get_client
-from .common import DEFAULT_READONLY_SCOPES, default_oauth_client_secrets_file
+from .common import DEFAULT_OAUTH_SCOPES, default_oauth_client_secrets_file
 from .server import mcp
 from . import tools as _tools  # noqa: F401
 
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
                 return
             prepared_client_config = _prepare_oauth_client_config(client, args)
             result = client.run_oauth_login(
-                scopes=args.scopes or DEFAULT_READONLY_SCOPES,
+                scopes=args.scopes or DEFAULT_OAUTH_SCOPES,
                 open_browser=not args.no_browser,
                 port=args.port,
             )

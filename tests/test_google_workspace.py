@@ -152,7 +152,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         client.get_sheet_values = Mock(
             side_effect=RuntimeError(
                 "Cached OAuth token is missing required scopes: "
-                f"{workspace.SHEETS_SCOPE}. Re-run `google-workspace-mcp auth` to refresh the token."
+                f"{workspace.SHEETS_READ_SCOPE}. Re-run `google-workspace-mcp auth` to refresh the token."
             )
         )
         client.export_sheet_via_drive = Mock(return_value=b"left,right\r\nvalue-1,value-2\r\n")
@@ -172,14 +172,14 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertEqual(result["range"], "E187:F187")
         self.assertEqual(result["values"], [["left", "right"], ["value-1", "value-2"]])
         self.assertEqual(result["source"], "drive_export_csv_fallback")
-        self.assertIn("spreadsheets.readonly", result["auth_warning"])
+        self.assertIn(workspace.SHEETS_READ_SCOPE, result["auth_warning"])
 
     def test_read_sheet_grid_falls_back_to_drive_export_for_gid_url_when_sheets_scope_is_missing(self) -> None:
         client = self.make_client()
         client.get_sheet_grid = Mock(
             side_effect=RuntimeError(
                 "Cached OAuth token is missing required scopes: "
-                f"{workspace.SHEETS_SCOPE}. Re-run `google-workspace-mcp auth` to refresh the token."
+                f"{workspace.SHEETS_READ_SCOPE}. Re-run `google-workspace-mcp auth` to refresh the token."
             )
         )
         client.export_sheet_via_drive = Mock(return_value=b"alpha,beta\r\ngamma,delta\r\n")
@@ -199,7 +199,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         first_cell = result["sheets"][0]["data"][0]["rows"][0]["cells"][0]
         self.assertEqual(first_cell["a1"], "E187")
         self.assertEqual(first_cell["formatted_value"], "alpha")
-        self.assertIn("spreadsheets.readonly", result["auth_warning"])
+        self.assertIn(workspace.SHEETS_READ_SCOPE, result["auth_warning"])
 
     def test_search_sheet_limits_search_to_gid_sheet(self) -> None:
         client = self.make_client()
@@ -249,7 +249,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         client._request.assert_called_once_with(
             "GET",
             "https://chat.googleapis.com/v1/spaces/AAAAB3NzaC1yc2E/messages",
-            scopes=[workspace.CHAT_MESSAGES_SCOPE],
+            scopes=[workspace.CHAT_MESSAGES_READ_SCOPE],
             allow_api_key=False,
             params={
                 "pageSize": 25,
@@ -278,7 +278,7 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         client._request.assert_called_once_with(
             "GET",
             "https://chat.googleapis.com/v1/spaces/AAQAyxdRoZo/messages/WNSdv6IyQf0",
-            scopes=[workspace.CHAT_MESSAGES_SCOPE],
+            scopes=[workspace.CHAT_MESSAGES_READ_SCOPE],
             allow_api_key=False,
         )
 
@@ -505,7 +505,73 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertFalse(summary["oauth_token_capabilities"]["sheets_readonly"])
         self.assertTrue(summary["oauth_token_capabilities"]["sheets_url_drive_export_fallback"])
         self.assertIn("gid/range", " ".join(summary["notes"]))
-        self.assertIn("documents.readonly", " ".join(summary["notes"]))
+        self.assertIn(workspace.DOCS_READ_SCOPE, " ".join(summary["notes"]))
+
+    def test_auth_summary_reports_readonly_sheet_scope_as_read_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "scopes": [workspace.SHEETS_READ_SCOPE],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(Path(temp_dir) / "client-secret.json"),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(token_file),
+                }
+            )
+            summary = client.auth_summary()
+
+        self.assertTrue(summary["oauth_token_capabilities"]["sheets_readonly"])
+        self.assertFalse(summary["oauth_token_capabilities"]["sheets_url_drive_export_fallback"])
+
+    def test_user_oauth_credentials_accepts_full_sheet_scope_for_readonly_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "scopes": [workspace.SHEETS_SCOPE],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(Path(temp_dir) / "client-secret.json"),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(token_file),
+                }
+            )
+
+            fake_credentials = Mock()
+            fake_credentials.valid = True
+            fake_credentials.token = "access-token"
+            fake_credentials.expired = False
+            fake_credentials.refresh_token = "refresh-token"
+
+            with patch(
+                "google_workspace_mcp.client.UserOAuthCredentials.from_authorized_user_file",
+                return_value=fake_credentials,
+            ) as credentials_factory:
+                credentials = client._user_oauth_credentials([workspace.SHEETS_READ_SCOPE])
+
+        self.assertIs(credentials, fake_credentials)
+        credentials_factory.assert_called_once_with(
+            str(token_file),
+            [workspace.SHEETS_SCOPE],
+        )
 
     def test_auth_summary_marks_missing_oauth_client_secret_file_as_not_configured(self) -> None:
         client = self.make_client(
