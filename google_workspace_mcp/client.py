@@ -292,6 +292,12 @@ class GoogleWorkspaceClient:
             return []
         return normalize_scopes(payload.get("scopes"))
 
+    def _scopes_for_cached_user_credentials(self, required_scopes: Iterable[str]) -> list[str]:
+        cached_scopes = self._cached_oauth_token_scopes()
+        if cached_scopes:
+            return cached_scopes
+        return normalize_scopes(required_scopes)
+
     def _missing_cached_oauth_scopes(self, required_scopes: Iterable[str]) -> list[str]:
         cached_scopes = self._cached_oauth_token_scopes()
         return [
@@ -782,10 +788,14 @@ class GoogleWorkspaceClient:
                 f"{missing_display}. Re-run `google-workspace-mcp auth` to refresh the token."
             )
 
+        # Refresh tokens must be reloaded with the scopes originally granted by Google.
+        # Replacing a cached write scope with its readonly alias can trigger `invalid_scope`
+        # once the access token expires and refresh is required.
+        credential_scopes = self._scopes_for_cached_user_credentials(scope_list)
         try:
             credentials = UserOAuthCredentials.from_authorized_user_file(
                 str(self.oauth_token_file),
-                list(scope_list),
+                credential_scopes,
             )
         except ValueError as exc:
             raise RuntimeError(

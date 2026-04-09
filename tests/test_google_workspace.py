@@ -449,6 +449,53 @@ class GoogleWorkspaceClientTests(unittest.TestCase):
         self.assertIn("missing required scopes", str(caught.exception))
         self.assertIn(workspace.DRIVE_SCOPE, str(caught.exception))
 
+    def test_user_oauth_credentials_uses_cached_write_scope_when_readonly_alias_is_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "oauth-user-token.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "token": "expired-access-token",
+                        "refresh_token": "refresh-token",
+                        "client_id": "client-id",
+                        "client_secret": "client-secret",
+                        "scopes": [workspace.SHEETS_WRITE_SCOPE],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = self.make_client(
+                {
+                    "GOOGLE_OAUTH_CLIENT_SECRETS_FILE": str(Path(temp_dir) / "client-secret.json"),
+                    "GOOGLE_OAUTH_TOKEN_FILE": str(token_file),
+                }
+            )
+
+            class FakeCredentials:
+                def __init__(self) -> None:
+                    self.valid = False
+                    self.token = None
+                    self.expired = True
+                    self.refresh_token = "refresh-token"
+
+                def refresh(self, _request: object) -> None:
+                    self.valid = True
+                    self.expired = False
+                    self.token = "fresh-access-token"
+
+            fake_credentials = FakeCredentials()
+
+            with patch(
+                "google_workspace_mcp.client.UserOAuthCredentials.from_authorized_user_file",
+                return_value=fake_credentials,
+            ) as from_file, patch.object(client, "_save_user_credentials") as save_mock:
+                credentials = client._user_oauth_credentials([workspace.SHEETS_SCOPE])
+
+        self.assertIs(credentials, fake_credentials)
+        self.assertEqual(from_file.call_args.args[1], [workspace.SHEETS_WRITE_SCOPE])
+        save_mock.assert_called_once_with(fake_credentials)
+        self.assertEqual(credentials.token, "fresh-access-token")
+
     def test_auth_summary_reports_cached_and_missing_scopes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             token_file = Path(temp_dir) / "oauth-user-token.json"
